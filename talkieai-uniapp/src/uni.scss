@@ -1,0 +1,71 @@
+/**
+ * 杩欓噷鏄痷ni-app鍐呯疆鐨勫父鐢ㄦ牱寮忓彉閲? *
+ * uni-app 瀹樻柟鎵╁睍鎻掍欢鍙婃彃浠跺競鍦猴紙https://ext.dcloud.net.cn锛変笂寰堝涓夋柟鎻掍欢鍧囦娇鐢ㄤ簡杩欎簺鏍峰紡鍙橀噺
+ * 濡傛灉浣犳槸鎻掍欢寮€鍙戣€咃紝寤鸿浣犱娇鐢╯css棰勫鐞嗭紝骞跺湪鎻掍欢浠ｇ爜涓洿鎺ヤ娇鐢ㄨ繖浜涘彉閲忥紙鏃犻渶 import 杩欎釜鏂囦欢锛夛紝鏂逛究鐢ㄦ埛閫氳繃鎼Н鏈ㄧ殑鏂瑰紡寮€鍙戞暣浣撻鏍间竴鑷寸殑App
+ *
+ */
+
+/**
+ * 濡傛灉浣犳槸App寮€鍙戣€咃紙鎻掍欢浣跨敤鑰咃級锛屼綘鍙互閫氳繃淇敼杩欎簺鍙橀噺鏉ュ畾鍒惰嚜宸辩殑鎻掍欢涓婚锛屽疄鐜拌嚜瀹氫箟涓婚鍔熻兘
+ *
+ * 濡傛灉浣犵殑椤圭洰鍚屾牱浣跨敤浜唖css棰勫鐞嗭紝浣犱篃鍙互鐩存帴鍦ㄤ綘鐨?scss 浠ｇ爜涓娇鐢ㄥ涓嬪彉閲忥紝鍚屾椂鏃犻渶 import 杩欎釜鏂囦欢
+ */
+
+/* 棰滆壊鍙橀噺 */
+
+/* 琛屼负鐩稿叧棰滆壊 */
+$uni-color-primary: #007aff;
+$uni-color-success: #4cd964;
+$uni-color-warning: #f0ad4e;
+$uni-color-error: #dd524d;
+
+/* 鏂囧瓧鍩烘湰棰滆壊 */
+$uni-text-color: #333; // 鍩烘湰鑹?$uni-text-color-inverse: #fff; // 鍙嶈壊
+$uni-text-color-grey: #999; // 杈呭姪鐏拌壊锛屽鍔犺浇鏇村鐨勬彁绀轰俊鎭?$uni-text-color-placeholder: #808080;
+$uni-text-color-disable: #c0c0c0;
+
+/* 鑳屾櫙棰滆壊 */
+$uni-bg-color: #fff;
+$uni-bg-color-grey: #f8f8f8;
+$uni-bg-color-hover: #f1f1f1; // 鐐瑰嚮鐘舵€侀鑹?$uni-bg-color-mask: rgba(0, 0, 0, 0.4); // 閬僵棰滆壊
+
+/* 杈规棰滆壊 */
+$uni-border-color: #c8c7cc;
+
+/* 灏哄鍙橀噺 */
+
+/* 鏂囧瓧灏哄 */
+$uni-font-size-sm: 12px;
+$uni-font-size-base: 14px;
+$uni-font-size-lg: 16;
+
+/* 鍥剧墖灏哄 */
+$uni-img-size-sm: 20px;
+$uni-img-size-base: 26px;
+$uni-img-size-lg: 40px;
+
+/* Border Radius */
+$uni-border-radius-sm: 2px;
+$uni-border-radius-base: 3px;
+$uni-border-radius-lg: 6px;
+$uni-border-radius-circle: 50%;
+
+/* 姘村钩闂磋窛 */
+$uni-spacing-row-sm: 5px;
+$uni-spacing-row-base: 10px;
+$uni-spacing-row-lg: 15px;
+
+/* 鍨傜洿闂磋窛 */
+$uni-spacing-col-sm: 4px;
+$uni-spacing-col-base: 8px;
+$uni-spacing-col-lg: 12px;
+
+/* 閫忔槑搴?*/
+$uni-opacity-disabled: 0.3; // 缁勪欢绂佺敤鎬佺殑閫忔槑搴?
+/* 鏂囩珷鍦烘櫙鐩稿叧 */
+$uni-color-title: #2c405a; // 鏂囩珷鏍囬棰滆壊
+$uni-font-size-title: 20px;
+$uni-color-subtitle: #555; // 浜岀骇鏍囬棰滆壊
+$uni-font-size-subtitle: 18px;
+$uni-color-paragraph: #3f536e; // 鏂囩珷娈佃惤棰滆壊
+$uni-font-size-paragraph: 15px;

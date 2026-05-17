@@ -1,0 +1,113 @@
+# init: true 使用 tini 作为 PID 1，便于 SIGTERM 传递给子进程；避免 sh -c 管道导致 down/stop 长时间挂起
+services:
+  mma:
+    build: ./MMA
+    init: true
+    ports:
+      - "8001:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AI_SERVER=${AI_SERVER:-ZHIPU}
+      - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+    volumes:
+      - ./MMA/memory:/app/memory
+      - ./MMA/logs:/app/logs
+    entrypoint: []
+    command: >
+      sh -c "uvicorn app:app --host 0.0.0.0 --port 8000 2>> /app/logs/error.log | tee /app/logs/print.log"
+
+  soa:
+    build: ./SOA
+    init: true
+    ports:
+      - "8002:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AI_SERVER=${AI_SERVER:-ZHIPU}
+      - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+    volumes:
+      - ./SOA/memory:/app/memory
+      - ./SOA/logs:/app/logs
+    entrypoint: []
+    command: >
+      sh -c "uvicorn app:app --host 0.0.0.0 --port 8000 2>> /app/logs/error.log | tee /app/logs/print.log"
+
+  gra:
+    build: ./GRA
+    init: true
+    ports:
+      - "8003:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AI_SERVER=${AI_SERVER:-ZHIPU}
+      - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+    volumes:
+      - ./GRA/memory:/app/memory
+      - ./GRA/logs:/app/logs
+    entrypoint: []
+    command: >
+      sh -c "uvicorn app:app --host 0.0.0.0 --port 8000 2>> /app/logs/error.log | tee /app/logs/print.log"
+
+  sca:
+    build: ./SCA
+    init: true
+    ports:
+      - "8004:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AI_SERVER=${AI_SERVER:-ZHIPU}
+      - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+    volumes:
+      - ./SCA/memory:/app/memory
+      - ./SCA/logs:/app/logs
+    entrypoint: []
+    command: >
+      sh -c "uvicorn app:app --host 0.0.0.0 --port 8000 2>> /app/logs/error.log | tee /app/logs/print.log"
+
+  ssa:
+    build: ./SSA
+    init: true
+    ports:
+      - "8005:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AI_SERVER=${AI_SERVER:-ZHIPU}
+      - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+    volumes:
+      - ./SSA/memory:/app/memory
+      - ./SSA/logs:/app/logs
+    entrypoint: []
+    command: >
+      sh -c "uvicorn app:app --host 0.0.0.0 --port 8000 2>> /app/logs/error.log | tee /app/logs/print.log"
+
+  oa:
+    build: ./OA
+    init: true
+    ports:
+      - "8006:8000"
+      - "8502:8501"
+    # 无时区预约串按此时区解释（App 已发 UTC ISO 时可忽略）；新加坡可改为 Asia/Singapore
+    environment:
+      - OA_SCHEDULE_TZ=${OA_SCHEDULE_TZ:-Asia/Shanghai}
+    depends_on:
+      - mma
+      - gra
+      - soa
+      - sca
+      - ssa
+    volumes:
+      - ./OA/memory:/app/memory
+      - ./OA/logs:/app/logs
+    entrypoint: []
+    command: >
+      sh -c "uvicorn app:app --host 0.0.0.0 --port 8000 2>> /app/logs/error.log | tee /app/logs/print.log"
