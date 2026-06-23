@@ -49,9 +49,9 @@ class TopicEntity(Base):
     update_time = Column("update_time", DateTime, default=datetime.datetime.now)
 
     # created_by 增加搜索索引
-    created_by_index = Index("created_by_index", created_by)
+    created_by_index = Index("idx_topic_created_by", created_by)
     # group_id 增加搜索索引
-    group_id_index = Index("group_id_index", group_id)
+    group_id_index = Index("idx_topic_group_id", group_id)
 
 class TopicSessionRelation(Base):
     """话题与session关系表"""
@@ -70,9 +70,9 @@ class TopicSessionRelation(Base):
     update_time = Column("update_time", DateTime, default=datetime.datetime.now)
 
     # topic_id 增加搜索索引
-    topic_id_index = Index("topic_id_index", topic_id)
+    topic_id_index = Index("idx_topic_session_relation_topic_id", topic_id)
     # session_id 增加搜索索引
-    session_id_index = Index("session_id_index", session_id)    
+    session_id_index = Index("idx_topic_session_relation_session_id", session_id)
 
 class AccountTopicEntity(Base):
     """ 用户创建的话题表 """
@@ -113,7 +113,7 @@ class TopicTargetEntity(Base):
     update_time = Column("update_time", DateTime, default=datetime.datetime.now)
 
     # topic_id 增加搜索索引
-    topic_id_index = Index("topic_id_index", topic_id)
+    topic_id_index = Index("idx_topic_target_topic_id", topic_id)
 
 # 话题短语
 class TopicPhraseEntity(Base):
@@ -138,7 +138,7 @@ class TopicPhraseEntity(Base):
     update_time = Column("update_time", DateTime, default=datetime.datetime.now)
 
     # topic_id 增加搜索索引
-    topic_id_index = Index("topic_id_index", topic_id)
+    topic_id_index = Index("idx_topic_phrase_topic_id", topic_id)
 
 
 

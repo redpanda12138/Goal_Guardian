@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import unittest
@@ -9,10 +10,14 @@ SERVER_ROOT = Path(__file__).resolve().parents[1]
 
 class ServicesPackageImportTest(unittest.TestCase):
     def run_import_check(self, command):
+        env = os.environ.copy()
+        env["DATABASE_URL"] = "sqlite:///:memory:"
+        env["SQL_ECHO"] = "false"
         try:
             return subprocess.run(
                 [sys.executable, "-c", command],
                 cwd=SERVER_ROOT,
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=30,
