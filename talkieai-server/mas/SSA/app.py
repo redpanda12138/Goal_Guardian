@@ -1,13 +1,24 @@
 import json
 import requests
 from pathlib import Path
+import sys
 from datetime import datetime
 from fastapi import FastAPI, Request # type: ignore
 from ai_helper import ask_ai
 
+for common_dir in (
+    Path(__file__).resolve().parent / "common",
+    Path(__file__).resolve().parents[1] / "common",
+):
+    if common_dir.exists() and str(common_dir) not in sys.path:
+        sys.path.insert(0, str(common_dir))
+
+from mas_memory_store import load_json, save_json, memory_exists
+
 # === Configuration ===
 SUMMARY_FILE = Path("memory/session_summaries.json")
 MMA_URL = "http://mma:8000/extract"
+SERVICE_NAME = "ssa"
 
 
 # === Initialization ===
@@ -22,11 +33,7 @@ def ask_gpt(messages):
 
 # === Memory Handlers ===
 def save_summary_to_file(patient_id, chat_history, summary):
-    if SUMMARY_FILE.exists():
-        with open(SUMMARY_FILE) as f:
-            summaries = json.load(f)
-    else:
-        summaries = []
+    summaries = load_json(SERVICE_NAME, "session_summaries", [], SUMMARY_FILE)
 
     summaries.append({
         "patient_id": patient_id,
@@ -34,9 +41,7 @@ def save_summary_to_file(patient_id, chat_history, summary):
         "summary": summary
     })
 
-    SUMMARY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(SUMMARY_FILE, "w") as f:
-        json.dump(summaries, f, indent=2)
+    save_json(SERVICE_NAME, "session_summaries", summaries, SUMMARY_FILE)
 
     print(f"Session summary for {patient_id} saved", flush=True)
 
@@ -105,7 +110,7 @@ async def get_summaries(patient_id: str):
     """
     获取指定患者的所有会话摘要
     """
-    if not SUMMARY_FILE.exists():
+    if not memory_exists(SERVICE_NAME, "session_summaries", SUMMARY_FILE):
         return {
             "status": "not_found",
             "patient_id": patient_id,
@@ -113,8 +118,7 @@ async def get_summaries(patient_id: str):
         }
     
     try:
-        with open(SUMMARY_FILE) as f:
-            all_summaries = json.load(f)
+        all_summaries = load_json(SERVICE_NAME, "session_summaries", [], SUMMARY_FILE)
         
         # 过滤出该患者的摘要
         patient_summaries = [

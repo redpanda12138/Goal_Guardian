@@ -2,6 +2,11 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from app.config import Config
+from app.db.engine_config import (
+    build_engine_options,
+    normalize_database_url,
+    should_install_mysql_checkout_listener,
+)
 from sqlalchemy.exc import DisconnectionError
 
 
@@ -21,8 +26,11 @@ def checkout_listener(dbapi_con, con_record, con_proxy):
 # 创建数据库连接, SQLALCHEMY_DATABASE_URL不能为空
 if not Config.SQLALCHEMY_DATABASE_URL:
     raise Exception('SQLALCHEMY_DATABASE_URL不能为空')
-engine = create_engine(Config.SQLALCHEMY_DATABASE_URL, echo=Config.SQL_ECHO, pool_pre_ping=True, pool_size=100, pool_recycle=360)
-event.listen(engine, 'checkout', checkout_listener)
+database_url = normalize_database_url(Config.SQLALCHEMY_DATABASE_URL)
+engine_options = build_engine_options(database_url, Config.SQL_ECHO)
+engine = create_engine(database_url, **engine_options)
+if should_install_mysql_checkout_listener(database_url):
+    event.listen(engine, 'checkout', checkout_listener)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 创建基类
@@ -36,4 +44,3 @@ def get_db():
         yield db
     finally:
         db.close()
-

@@ -5,3 +5,6 @@ requests
 openai
 zhipuai
 PyYAML
+SQLAlchemy==2.0.10
+psycopg2-binary==2.9.9
+pymysql==1.0.2

@@ -1,13 +1,24 @@
 from pathlib import Path
 import os
+import sys
 import time, threading, json, requests, asyncio
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, HTTPException
 
+for common_dir in (
+    Path(__file__).resolve().parent / "common",
+    Path(__file__).resolve().parents[1] / "common",
+):
+    if common_dir.exists() and str(common_dir) not in sys.path:
+        sys.path.insert(0, str(common_dir))
+
+from mas_memory_store import load_json, save_json, memory_exists
+
 # === Configuration ===
 MMA_URL = "http://mma:8000/extract"
 AGENT_URL = "http://{agent}:8000/trigger"
+SERVICE_NAME = "oa"
 
 SESSION_NOTES_FILE = Path("memory/session_notes_mock.json")
 REVIEW_SCHEDULE_FILE = Path("memory/review_schedule.json")
@@ -48,26 +59,21 @@ app = FastAPI()
 
 # === Memory Handlers ===
 def load_review_schedule():
-    if REVIEW_SCHEDULE_FILE.exists():
-        try:
-            with open(REVIEW_SCHEDULE_FILE) as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            print("Warning: REVIEW_SCHEDULE_FILE is not valid JSON. Starting fresh.", flush=True)
-    return {}
+    return load_json(SERVICE_NAME, "review_schedule", {}, REVIEW_SCHEDULE_FILE)
 
 def load_goal_reviews():
-    if GOAL_REVIEW_FILE.exists():
-        try:
-            with open(GOAL_REVIEW_FILE) as f:
-                raw = json.load(f)
-                return [json.loads(e) if isinstance(e, str) else e for e in raw]
-        except json.JSONDecodeError:
-            print("Warning: GOAL_REVIEW_FILE is not valid JSON. Starting fresh.", flush=True)
-    return []
+    raw = load_json(SERVICE_NAME, "goal_reviews", [], GOAL_REVIEW_FILE)
+    return [json.loads(e) if isinstance(e, str) else e for e in raw]
+
+
+def save_goal_reviews(records):
+    save_json(SERVICE_NAME, "goal_reviews", records, GOAL_REVIEW_FILE)
+
+
+def save_review_schedule(schedule):
+    save_json(SERVICE_NAME, "review_schedule", schedule, REVIEW_SCHEDULE_FILE)
 
 def save_message(new_record):
-    GOAL_REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
     records = load_goal_reviews()
 
     updated = False
@@ -127,8 +133,7 @@ def save_message(new_record):
             new_record["turn_index"] = new_record.get("turn_index", assistant_count)
         records.append(new_record)
 
-    with open(GOAL_REVIEW_FILE, "w") as f:
-        json.dump(records, f, indent=2)
+    save_goal_reviews(records)
 
 
 # === Trigger Helper (used by both loop and endpoint) ===
@@ -145,12 +150,11 @@ def trigger_agent_sync(patient_id: str, turn_index: int, agent_to_trigger: str) 
 
     # Special logic for SSA
     if agent == "ssa":
-        if not GOAL_REVIEW_FILE.exists():
+        if not memory_exists(SERVICE_NAME, "goal_reviews", GOAL_REVIEW_FILE):
             return {"status": "error", "reason": "Goal review file not found."}
 
         try:
-            with open(GOAL_REVIEW_FILE) as f:
-                entries = json.load(f)
+            entries = load_goal_reviews()
             patient_entry = next((e for e in entries if e.get("patient_id") == patient_id), None)
 
             if not patient_entry:
@@ -202,9 +206,7 @@ def reset_patient_session_state(patient_id: str) -> None:
     else:
         patient_entry["turn_index"] = 0
         patient_entry["chat_history"] = []
-    GOAL_REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(GOAL_REVIEW_FILE, "w") as f:
-        json.dump(records, f, indent=2)
+    save_goal_reviews(records)
     print(
         f"🗓️ Reset OA session state for {patient_id} before scheduled SOA trigger",
         flush=True,
@@ -213,12 +215,11 @@ def reset_patient_session_state(patient_id: str) -> None:
 
 def trigger_mma():
 
-    if not SESSION_NOTES_FILE.exists():
+    if not memory_exists(SERVICE_NAME, "session_notes_mock", SESSION_NOTES_FILE):
         return {"status": "error", "reason": "session_notes_mock.json not found"}
 
     try:
-        with open(SESSION_NOTES_FILE) as f:
-            payload = json.load(f)
+        payload = load_json(SERVICE_NAME, "session_notes_mock", [], SESSION_NOTES_FILE)
 
         if not isinstance(payload, list) or not all(isinstance(p, dict) for p in payload):
             return {"status": "error", "reason": "Invalid JSON structure. Expected a list of dicts."}
@@ -275,9 +276,7 @@ def apply_hourly_review_triggers(schedule: dict, now_utc: datetime) -> list[str]
                 )
 
     if changed:
-        REVIEW_SCHEDULE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(REVIEW_SCHEDULE_FILE, "w") as f:
-            json.dump(schedule, f, indent=2)
+        save_review_schedule(schedule)
 
     return triggered_ids
 
@@ -326,9 +325,7 @@ def orchestration_loop():
                                 reset_count += 1
                         
                         if reset_count > 0:
-                            GOAL_REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-                            with open(GOAL_REVIEW_FILE, "w") as f:
-                                json.dump(records, f, indent=2)
+                            save_goal_reviews(records)
                             
                             print(f"[{now_slot}] Auto-reset completed: {reset_count} sessions reset", flush=True)
                         else:
@@ -397,8 +394,7 @@ async def receive_new_sessions(request: Request):
             detail={"status": "error", "invalid_entries": invalid_entries}
         )
 
-    with open(REVIEW_SCHEDULE_FILE, "w") as f:
-        json.dump(schedule, f, indent=2)
+    save_review_schedule(schedule)
 
     print(f"OA memory updated for {len(payload)} patients.", flush=True)
     return {"status": "received", "patients": len(payload)}
@@ -602,8 +598,7 @@ async def get_session_status(patient_id: str):
         patient_entry["turn_index"] = 0
         patient_entry["chat_history"] = []
         try:
-            with open(GOAL_REVIEW_FILE, "w") as f:
-                json.dump(records, f, indent=2)
+            save_goal_reviews(records)
             print(f"✅ Auto-reset completed: patient {patient_id} turn_index {old_turn_index} -> 0, chat_history {old_history_len} -> 0", flush=True)
             turn_index = 0
             chat_history_len = 0
@@ -725,9 +720,7 @@ async def reset_all_sessions():
     
     # 保存更新后的记录
     if reset_count > 0:
-        GOAL_REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(GOAL_REVIEW_FILE, "w") as f:
-            json.dump(records, f, indent=2)
+        save_goal_reviews(records)
         
         print(f"Reset all sessions: {reset_count} patients reset", flush=True)
     

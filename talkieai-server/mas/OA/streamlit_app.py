@@ -1,7 +1,7 @@
 import streamlit as st
-import json, requests, threading, time, base64
+import requests, threading, time, base64
 from pathlib import Path
-from app import save_message
+from app import save_message, load_goal_reviews
 
 
 # === Configuration ===
@@ -34,15 +34,14 @@ st.markdown(f'''
 
 # === Wait until conversation file exists ===
 waiting = st.empty()
-while not REVIEWS_FILE.exists():
+file_data = load_goal_reviews()
+while not file_data:
     waiting.subheader("Waiting for health coach to start the session...")
     time.sleep(1)
+    file_data = load_goal_reviews()
 waiting.empty()
 
 # === Load Session State ===
-with open(REVIEWS_FILE) as f:
-    file_data = json.load(f)
-
 entry = file_data[0]
 patient_id = entry.get("patient_id", "")
 turn_index = int(entry.get("turn_index", 1))

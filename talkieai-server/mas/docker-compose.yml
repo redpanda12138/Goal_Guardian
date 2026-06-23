@@ -5,13 +5,17 @@ services:
     init: true
     ports:
       - "8001:8000"
+    env_file:
+      - ../.env
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
       - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+      - MAS_MEMORY_REQUIRE_DATABASE=true
     volumes:
+      - ./common:/app/common:ro
       - ./MMA/memory:/app/memory
       - ./MMA/logs:/app/logs
     entrypoint: []
@@ -23,13 +27,17 @@ services:
     init: true
     ports:
       - "8002:8000"
+    env_file:
+      - ../.env
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
       - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+      - MAS_MEMORY_REQUIRE_DATABASE=true
     volumes:
+      - ./common:/app/common:ro
       - ./SOA/memory:/app/memory
       - ./SOA/logs:/app/logs
     entrypoint: []
@@ -41,13 +49,17 @@ services:
     init: true
     ports:
       - "8003:8000"
+    env_file:
+      - ../.env
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
       - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+      - MAS_MEMORY_REQUIRE_DATABASE=true
     volumes:
+      - ./common:/app/common:ro
       - ./GRA/memory:/app/memory
       - ./GRA/logs:/app/logs
     entrypoint: []
@@ -59,13 +71,17 @@ services:
     init: true
     ports:
       - "8004:8000"
+    env_file:
+      - ../.env
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
       - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+      - MAS_MEMORY_REQUIRE_DATABASE=true
     volumes:
+      - ./common:/app/common:ro
       - ./SCA/memory:/app/memory
       - ./SCA/logs:/app/logs
     entrypoint: []
@@ -77,13 +93,17 @@ services:
     init: true
     ports:
       - "8005:8000"
+    env_file:
+      - ../.env
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
       - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+      - MAS_MEMORY_REQUIRE_DATABASE=true
     volumes:
+      - ./common:/app/common:ro
       - ./SSA/memory:/app/memory
       - ./SSA/logs:/app/logs
     entrypoint: []
@@ -96,9 +116,12 @@ services:
     ports:
       - "8006:8000"
       - "8502:8501"
+    env_file:
+      - ../.env
     # 无时区预约串按此时区解释（App 已发 UTC ISO 时可忽略）；新加坡可改为 Asia/Singapore
     environment:
       - OA_SCHEDULE_TZ=${OA_SCHEDULE_TZ:-Asia/Shanghai}
+      - MAS_MEMORY_REQUIRE_DATABASE=true
     depends_on:
       - mma
       - gra
@@ -106,6 +129,7 @@ services:
       - sca
       - ssa
     volumes:
+      - ./common:/app/common:ro
       - ./OA/memory:/app/memory
       - ./OA/logs:/app/logs
     entrypoint: []

@@ -1,10 +1,20 @@
 from pathlib import Path
 import os
+import sys
 import time
 import requests, json, threading
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request  # type: ignore
 from ai_helper import ask_ai
+
+for common_dir in (
+    Path(__file__).resolve().parent / "common",
+    Path(__file__).resolve().parents[1] / "common",
+):
+    if common_dir.exists() and str(common_dir) not in sys.path:
+        sys.path.insert(0, str(common_dir))
+
+from mas_memory_store import load_json, save_json
 
 # === Configuration ===
 OA_URL = "http://oa:8000/receive_message"
@@ -12,6 +22,7 @@ OA_USER_URL = "http://oa:8000/receive_user_message"
 SSA_URL = "http://oa:8000/trigger_agent"
 
 MEMORY_FILE = Path("/app/memory/sca_conversations.json")
+SERVICE_NAME = "sca"
 SCA_AUTO_TRIGGER_SSA_DELAY_SECONDS = int(
     os.getenv("SCA_AUTO_TRIGGER_SSA_DELAY_SECONDS", "45")
 )
@@ -29,17 +40,9 @@ def ask_gpt(messages):
 
 # === Memory Handlers ===
 def load_memory():
-    if not MEMORY_FILE.exists():
-        return []
-    with open(MEMORY_FILE) as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            print("Warning: Memory file is not valid JSON. Starting fresh.", flush=True)
-            return []
+    return load_json(SERVICE_NAME, "sca_conversations", [], MEMORY_FILE)
 
 def save_message(new_record):
-    MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     records = load_memory()
 
     updated = False
@@ -53,8 +56,7 @@ def save_message(new_record):
     if not updated:
         records.append(new_record)
 
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(records, f, indent=2)
+    save_json(SERVICE_NAME, "sca_conversations", records, MEMORY_FILE)
 
 
 def has_user_reply(patient_id: str) -> bool:

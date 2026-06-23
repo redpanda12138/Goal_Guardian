@@ -1,5 +1,6 @@
 import pandas as pd
 from pathlib import Path
+import sys
 import time, requests, json
 from fastapi import FastAPI, Request, Query
 from ai_helper import ask_ai, ask_ai_json
@@ -11,8 +12,18 @@ from note_utils import (
     apply_history_pagination,
 )
 
+for common_dir in (
+    Path(__file__).resolve().parent / "common",
+    Path(__file__).resolve().parents[1] / "common",
+):
+    if common_dir.exists() and str(common_dir) not in sys.path:
+        sys.path.insert(0, str(common_dir))
+
+from mas_memory_store import load_json, save_json, memory_exists
+
 # === Configuration ===
 OA_URL = "http://oa:8000/new_sessions"
+SERVICE_NAME = "mma"
 
 SESSION_METADATA_FILE = Path("memory/session_metadata_mock.json")
 SESSION_NOTES_FILE = Path("memory/session_notes_mock.json")
@@ -164,26 +175,28 @@ async def extract(request: Request):
 
     # 1. Update session metadata
     session_df = pd.DataFrame(data)[['health_coach', 'study_id', 'date']]
-    if SESSION_METADATA_FILE.exists():
-        with open(SESSION_METADATA_FILE) as f:
-            existing = pd.DataFrame(json.load(f))
-    else:
-        existing = pd.DataFrame(columns=session_df.columns)
+    existing_data = load_json(
+        SERVICE_NAME, "session_metadata_mock", [], SESSION_METADATA_FILE
+    )
+    existing = pd.DataFrame(existing_data) if existing_data else pd.DataFrame(columns=session_df.columns)
 
     combined_sessions = pd.concat([existing, session_df], ignore_index=True)
     combined_sessions.drop_duplicates(subset=['study_id', 'date'], inplace=True)
     combined_sessions.sort_values(by=['study_id', 'date'], ascending=[False, False], inplace=True)
 
-    with open(SESSION_METADATA_FILE, "w") as f:
-        json.dump(combined_sessions.to_dict(orient="records"), f, indent=2)
+    save_json(
+        SERVICE_NAME,
+        "session_metadata_mock",
+        combined_sessions.to_dict(orient="records"),
+        SESSION_METADATA_FILE,
+    )
 
     print(f"Session metadata updated with {len(combined_sessions)} sessions.", flush=True)
 
     # 2. Extract structured session notes
-    patient_notes = {}
-    if SESSION_NOTES_FILE.exists():
-        with open(SESSION_NOTES_FILE) as f:
-            patient_notes = json.load(f)
+    patient_notes = load_json(
+        SERVICE_NAME, "session_notes_mock", {}, SESSION_NOTES_FILE
+    )
 
     for row in data:
         patient_id = row["study_id"]
@@ -234,17 +247,14 @@ async def extract(request: Request):
         if structured["preferred_name"]:
             entry["output"]["preferred_name"] = structured["preferred_name"]
 
-    with open(SESSION_NOTES_FILE, "w") as f:
-        json.dump(patient_notes, f, indent=2)
+    save_json(SERVICE_NAME, "session_notes_mock", patient_notes, SESSION_NOTES_FILE)
 
     print(f"Session notes updated with {len(patient_notes)} patients.", flush=True)
 
     # 3. Extract SMART goals
     smart_goals = {}
-    if WEEKLY_GOALS_FILE.exists():
-        with open(WEEKLY_GOALS_FILE) as f:
-            for item in json.load(f):
-                smart_goals[f"{item['patient_id']}|{item['date']}"] = item
+    for item in load_json(SERVICE_NAME, "weekly_smart_goals_mock", [], WEEKLY_GOALS_FILE):
+        smart_goals[f"{item['patient_id']}|{item['date']}"] = item
 
     for row in data:
         patient_id = row["study_id"]
@@ -281,13 +291,21 @@ async def extract(request: Request):
 
         time.sleep(1)
 
-    with open(WEEKLY_GOALS_FILE, "w") as f:
-        json.dump(sorted(smart_goals.values(), key=lambda x: (x["patient_id"], x["date"]), reverse=True), f, indent=2)
+    save_json(
+        SERVICE_NAME,
+        "weekly_smart_goals_mock",
+        sorted(smart_goals.values(), key=lambda x: (x["patient_id"], x["date"]), reverse=True),
+        WEEKLY_GOALS_FILE,
+    )
 
     # 同步维护“每位患者最新一条目标”索引，供查询接口快速读取
     latest_goals = build_latest_goals_index(list(smart_goals.values()))
-    with open(LATEST_WEEKLY_GOALS_FILE, "w") as f:
-        json.dump(latest_goals, f, indent=2)
+    save_json(
+        SERVICE_NAME,
+        "latest_smart_goals",
+        latest_goals,
+        LATEST_WEEKLY_GOALS_FILE,
+    )
 
     print(f"SMART goals updated with {len(smart_goals)} entries.", flush=True)
 
@@ -317,24 +335,24 @@ async def extract(request: Request):
 
 @app.get("/patient_notes/{patient_id}")
 def get_notes(patient_id: str):
-    if SESSION_NOTES_FILE.exists():
-        with open(SESSION_NOTES_FILE) as f:
-            notes = json.load(f)
-        if patient_id in notes:
-            print(f"Sent notes to SOA for patient {patient_id}", flush=True)
-            return notes[patient_id]["output"]
+    notes = load_json(SERVICE_NAME, "session_notes_mock", {}, SESSION_NOTES_FILE)
+    if patient_id in notes:
+        print(f"Sent notes to SOA for patient {patient_id}", flush=True)
+        return notes[patient_id]["output"]
     return {}
 
 @app.get("/patient_goals/{patient_id}")
 def get_goals(patient_id: str):
-    if LATEST_WEEKLY_GOALS_FILE.exists():
-        with open(LATEST_WEEKLY_GOALS_FILE) as f:
-            latest_goals = json.load(f)
+    if memory_exists(SERVICE_NAME, "latest_smart_goals", LATEST_WEEKLY_GOALS_FILE):
+        latest_goals = load_json(
+            SERVICE_NAME, "latest_smart_goals", {}, LATEST_WEEKLY_GOALS_FILE
+        )
         latest = latest_goals.get(patient_id)
         recent_goals = latest.get("output", {}).get("goals", []) if latest else []
-    elif WEEKLY_GOALS_FILE.exists():
-        with open(WEEKLY_GOALS_FILE) as f:
-            all_goals = json.load(f)
+    elif memory_exists(SERVICE_NAME, "weekly_smart_goals_mock", WEEKLY_GOALS_FILE):
+        all_goals = load_json(
+            SERVICE_NAME, "weekly_smart_goals_mock", [], WEEKLY_GOALS_FILE
+        )
         latest_index = build_latest_goals_index(all_goals)
         latest = latest_index.get(patient_id)
         recent_goals = latest.get("output", {}).get("goals", []) if latest else []
@@ -345,10 +363,8 @@ def get_goals(patient_id: str):
         print(f"No SMART goals found for {patient_id}", flush=True)
 
     preferred_name = "there"
-    if SESSION_NOTES_FILE.exists():
-        with open(SESSION_NOTES_FILE) as f:
-            session_data = json.load(f)
-        preferred_name = session_data.get(patient_id, {}).get("output", {}).get("preferred_name", "there")
+    session_data = load_json(SERVICE_NAME, "session_notes_mock", {}, SESSION_NOTES_FILE)
+    preferred_name = session_data.get(patient_id, {}).get("output", {}).get("preferred_name", "there")
 
     print(f"Sent SMART goals to GRA for patient {patient_id}", flush=True)
     return {
@@ -363,11 +379,7 @@ def get_goals_history(
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
 ):
-    if WEEKLY_GOALS_FILE.exists():
-        with open(WEEKLY_GOALS_FILE) as f:
-            all_goals = json.load(f)
-    else:
-        all_goals = []
+    all_goals = load_json(SERVICE_NAME, "weekly_smart_goals_mock", [], WEEKLY_GOALS_FILE)
 
     history = get_patient_goal_history(all_goals, patient_id)
     history = apply_history_pagination(history, offset=offset, limit=limit)
