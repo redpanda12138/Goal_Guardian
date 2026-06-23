@@ -1,9 +1,4 @@
 # app/core/audio_utils.py
-import torchaudio
-import torch
-import numpy as np
-import librosa
-from typing import Tuple
 import os
 import logging
 
@@ -12,6 +7,8 @@ def preprocess_audio_for_whisper(audio_path: str, target_sr: int = 16000) -> str
     预处理音频文件，使其符合 Whisper 模型要求
     """
     try:
+        import librosa
+
         # 使用 librosa 加载音频（更好的音频格式兼容性）
         audio_data, sample_rate = librosa.load(audio_path, sr=None)
         
@@ -39,6 +36,8 @@ def validate_audio_file(audio_path: str) -> bool:
     验证音频文件是否有效
     """
     try:
+        import librosa
+
         # 尝试加载音频文件验证其有效性
         audio_data, sample_rate = librosa.load(audio_path, duration=1.0)  # 只加载1秒用于验证
         return len(audio_data) > 0

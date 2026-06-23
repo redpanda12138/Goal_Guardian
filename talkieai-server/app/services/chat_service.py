@@ -14,7 +14,6 @@ from app.ai.models import *
 from app.ai import chat_ai
 from app.core.azure_voice import *
 from app.core.exceptions import *
-from app.core.whisper_voice import whisper_processor
 from datetime import datetime, timezone
 
 MESSAGE_SYSTEM = "SYSTEM"
@@ -25,6 +24,8 @@ def _voice_to_text(speech_path: str) -> str:
     if not speech_path:
         return ""
     try:
+        from app.core.whisper_voice import whisper_processor
+
         if getattr(whisper_processor, "pipe", None):
             text = whisper_processor.transcribe_audio(speech_path)
             return (text or "").strip()

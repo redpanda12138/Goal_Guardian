@@ -8,7 +8,6 @@ from app.models.account_models import *
 from app.models.response import ApiResponse
 from app.services.account_service import AccountService
 from app.services.chat_service import ChatService
-from app.core.whisper_voice import whisper_processor
 from app.core.audio_utils import validate_audio_file
 
 router = APIRouter()
@@ -57,6 +56,8 @@ def voice_upload_api(
     db: Session = Depends(get_db),
     account_id: str = Depends(get_current_account),
 ):
+    from app.core.whisper_voice import whisper_processor
+
     """使用 Whisper 模型进行语音转文字"""
     chat_service = ChatService(db)
     
