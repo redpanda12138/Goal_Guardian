@@ -2,6 +2,7 @@ FROM python:3.10-slim
 
 ARG PYTORCH_VERSION=2.11.0
 ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG PYTORCH_WHEEL_SUFFIX=+cpu
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -19,8 +20,9 @@ RUN apt-get update \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir \
-        --index-url "${PYTORCH_INDEX_URL}" \
-        "torch==${PYTORCH_VERSION}" "torchaudio==${PYTORCH_VERSION}"
+        --extra-index-url "${PYTORCH_INDEX_URL}" \
+        "torch==${PYTORCH_VERSION}${PYTORCH_WHEEL_SUFFIX}" \
+        "torchaudio==${PYTORCH_VERSION}${PYTORCH_WHEEL_SUFFIX}"
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN useradd --create-home --uid 10001 appuser \

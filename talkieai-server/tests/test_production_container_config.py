@@ -38,7 +38,15 @@ class ProductionContainerConfigTest(unittest.TestCase):
             dockerfile,
         )
         self.assertIn(
-            '"torch==${PYTORCH_VERSION}" "torchaudio==${PYTORCH_VERSION}"',
+            'ARG PYTORCH_WHEEL_SUFFIX=+cpu',
+            dockerfile,
+        )
+        self.assertIn(
+            '--extra-index-url "${PYTORCH_INDEX_URL}"',
+            dockerfile,
+        )
+        self.assertIn(
+            '"torch==${PYTORCH_VERSION}${PYTORCH_WHEEL_SUFFIX}"',
             dockerfile,
         )
         self.assertIn(
@@ -73,6 +81,7 @@ class ProductionContainerConfigTest(unittest.TestCase):
             "WHISPER_MODEL_PATH=/models/whisper",
             "PYTORCH_GPU_INDEX_URL=https://download.pytorch.org/whl/REPLACE_WITH_CUDA_INDEX",
             "PYTORCH_GPU_VERSION=2.11.0",
+            "PYTORCH_GPU_WHEEL_SUFFIX=+REPLACE_WITH_CUDA_SUFFIX",
         ):
             self.assertIn(setting, env_example)
         self.assertNotRegex(env_example, r"(?i)(sk-[a-z0-9]{20,}|[a-f0-9]{32}\.[a-z0-9]{10,})")
@@ -108,6 +117,7 @@ class ProductionContainerConfigTest(unittest.TestCase):
         self.assertIn("capabilities: [gpu]", gpu)
         self.assertIn("PYTORCH_INDEX_URL: ${PYTORCH_GPU_INDEX_URL:?", gpu)
         self.assertIn("PYTORCH_VERSION: ${PYTORCH_GPU_VERSION:-2.11.0}", gpu)
+        self.assertIn("PYTORCH_WHEEL_SUFFIX: ${PYTORCH_GPU_WHEEL_SUFFIX:?", gpu)
 
     def test_oa_orchestration_can_be_disabled_for_backend_owned_scheduling(self):
         module_path = ROOT / "talkieai-server/mas/OA/runtime_config.py"

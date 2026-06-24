@@ -4,6 +4,7 @@ services:
       args:
         PYTORCH_INDEX_URL: ${PYTORCH_GPU_INDEX_URL:?Set PYTORCH_GPU_INDEX_URL to the official CUDA wheel index}
         PYTORCH_VERSION: ${PYTORCH_GPU_VERSION:-2.11.0}
+        PYTORCH_WHEEL_SUFFIX: ${PYTORCH_GPU_WHEEL_SUFFIX:?Set PYTORCH_GPU_WHEEL_SUFFIX to the matching CUDA suffix}
     deploy:
       resources:
         reservations:
