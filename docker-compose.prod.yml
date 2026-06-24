@@ -1,0 +1,219 @@
+name: goal-guardian
+
+services:
+  backend:
+    build:
+      context: ./talkieai-server
+      dockerfile: Dockerfile
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ./talkieai-server/.env.production
+    environment:
+      TEMP_SAVE_FILE_PATH: /app/files
+      WHISPER_MODEL_PATH: /models/whisper
+      MAS_MMA_URL: http://mma:8000
+      MAS_SOA_URL: http://soa:8000
+      MAS_GRA_URL: http://gra:8000
+      MAS_SCA_URL: http://sca:8000
+      MAS_SSA_URL: http://ssa:8000
+      MAS_OA_URL: http://oa:8000
+      MAS_MEMORY_REQUIRE_DATABASE: "true"
+      MAS_OA_SCHEDULER_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8098:8098"
+    volumes:
+      - backend-files:/app/files
+      - type: bind
+        source: ${WHISPER_MODEL_HOST_PATH:-./talkieai-server/mas/whisper-medium-sing2eng-translate}
+        target: /models/whisper
+        read_only: true
+    depends_on:
+      mma:
+        condition: service_healthy
+      soa:
+        condition: service_healthy
+      gra:
+        condition: service_healthy
+      sca:
+        condition: service_healthy
+      ssa:
+        condition: service_healthy
+      oa:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8098/openapi.json', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - app-network
+
+  mma:
+    build:
+      context: ./talkieai-server/mas/MMA
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ./talkieai-server/.env.production
+    environment:
+      MAS_MEMORY_REQUIRE_DATABASE: "true"
+    entrypoint: []
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./talkieai-server/mas/common:/app/common:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - app-network
+
+  soa:
+    build:
+      context: ./talkieai-server/mas/SOA
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ./talkieai-server/.env.production
+    environment:
+      MAS_MEMORY_REQUIRE_DATABASE: "true"
+    entrypoint: []
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./talkieai-server/mas/common:/app/common:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - app-network
+
+  gra:
+    build:
+      context: ./talkieai-server/mas/GRA
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ./talkieai-server/.env.production
+    environment:
+      MAS_MEMORY_REQUIRE_DATABASE: "true"
+    entrypoint: []
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./talkieai-server/mas/common:/app/common:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - app-network
+
+  sca:
+    build:
+      context: ./talkieai-server/mas/SCA
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ./talkieai-server/.env.production
+    environment:
+      MAS_MEMORY_REQUIRE_DATABASE: "true"
+    entrypoint: []
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./talkieai-server/mas/common:/app/common:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - app-network
+
+  ssa:
+    build:
+      context: ./talkieai-server/mas/SSA
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ./talkieai-server/.env.production
+    environment:
+      MAS_MEMORY_REQUIRE_DATABASE: "true"
+    entrypoint: []
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./talkieai-server/mas/common:/app/common:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - app-network
+
+  oa:
+    build:
+      context: ./talkieai-server/mas/OA
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ./talkieai-server/.env.production
+    environment:
+      MAS_MEMORY_REQUIRE_DATABASE: "true"
+      OA_ORCHESTRATION_ENABLED: "false"
+    entrypoint: []
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./talkieai-server/mas/common:/app/common:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  backend-files:

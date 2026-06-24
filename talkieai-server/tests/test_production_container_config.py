@@ -1,6 +1,8 @@
 import re
 import unittest
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,14 +82,31 @@ class ProductionContainerConfigTest(unittest.TestCase):
             self.assertIn(f"MAS_{service.upper()}_URL: http://{service}:8000", compose)
 
         self.assertIn("MAS_MEMORY_REQUIRE_DATABASE: \"true\"", compose)
+        self.assertIn(
+            'OA_ORCHESTRATION_ENABLED: "false"',
+            self.service_block(compose, "oa"),
+        )
         self.assertIn("backend-files:/app/files", compose)
-        self.assertIn("/models/whisper:ro", compose)
+        self.assertIn("target: /models/whisper", compose)
+        self.assertIn("read_only: true", compose)
 
     def test_gpu_override_only_requests_a_device_for_backend(self):
         gpu = self.read("docker-compose.gpu.yml")
         self.assertEqual(re.findall(r"(?m)^  [a-z][a-z0-9-]*:$", gpu), ["  backend:"])
         self.assertIn("driver: nvidia", gpu)
         self.assertIn("capabilities: [gpu]", gpu)
+
+    def test_oa_orchestration_can_be_disabled_for_backend_owned_scheduling(self):
+        module_path = ROOT / "talkieai-server/mas/OA/runtime_config.py"
+        self.assertTrue(module_path.is_file(), "missing OA runtime configuration")
+        spec = spec_from_file_location("oa_runtime_config", module_path)
+        runtime_config = module_from_spec(spec)
+        spec.loader.exec_module(runtime_config)
+
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertTrue(runtime_config.orchestration_enabled())
+        with patch.dict("os.environ", {"OA_ORCHESTRATION_ENABLED": "false"}):
+            self.assertFalse(runtime_config.orchestration_enabled())
 
 
 if __name__ == "__main__":
