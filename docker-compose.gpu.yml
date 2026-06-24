@@ -1,5 +1,9 @@
 services:
   backend:
+    build:
+      args:
+        PYTORCH_INDEX_URL: ${PYTORCH_GPU_INDEX_URL:?Set PYTORCH_GPU_INDEX_URL to the official CUDA wheel index}
+        PYTORCH_VERSION: ${PYTORCH_GPU_VERSION:-2.11.0}
     deploy:
       resources:
         reservations:

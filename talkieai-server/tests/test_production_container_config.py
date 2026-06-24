@@ -32,6 +32,15 @@ class ProductionContainerConfigTest(unittest.TestCase):
         self.assertIn("libsndfile1", dockerfile)
         self.assertIn("libgomp1", dockerfile)
         self.assertIn("pip install --no-cache-dir -r requirements.txt", dockerfile)
+        self.assertIn("ARG PYTORCH_VERSION=2.11.0", dockerfile)
+        self.assertIn(
+            "ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu",
+            dockerfile,
+        )
+        self.assertIn(
+            '"torch==${PYTORCH_VERSION}" "torchaudio==${PYTORCH_VERSION}"',
+            dockerfile,
+        )
         self.assertIn(
             'CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8098"]',
             dockerfile,
@@ -62,6 +71,8 @@ class ProductionContainerConfigTest(unittest.TestCase):
             "MAS_MEMORY_REQUIRE_DATABASE=true",
             "TEMP_SAVE_FILE_PATH=/app/files",
             "WHISPER_MODEL_PATH=/models/whisper",
+            "PYTORCH_GPU_INDEX_URL=https://download.pytorch.org/whl/REPLACE_WITH_CUDA_INDEX",
+            "PYTORCH_GPU_VERSION=2.11.0",
         ):
             self.assertIn(setting, env_example)
         self.assertNotRegex(env_example, r"(?i)(sk-[a-z0-9]{20,}|[a-f0-9]{32}\.[a-z0-9]{10,})")
@@ -95,6 +106,8 @@ class ProductionContainerConfigTest(unittest.TestCase):
         self.assertEqual(re.findall(r"(?m)^  [a-z][a-z0-9-]*:$", gpu), ["  backend:"])
         self.assertIn("driver: nvidia", gpu)
         self.assertIn("capabilities: [gpu]", gpu)
+        self.assertIn("PYTORCH_INDEX_URL: ${PYTORCH_GPU_INDEX_URL:?", gpu)
+        self.assertIn("PYTORCH_VERSION: ${PYTORCH_GPU_VERSION:-2.11.0}", gpu)
 
     def test_oa_orchestration_can_be_disabled_for_backend_owned_scheduling(self):
         module_path = ROOT / "talkieai-server/mas/OA/runtime_config.py"
