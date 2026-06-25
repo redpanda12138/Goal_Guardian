@@ -91,7 +91,8 @@ class ProductionContainerConfigTest(unittest.TestCase):
         self.assertEqual(compose.count("restart: unless-stopped"), 7)
         self.assertEqual(compose.count("healthcheck:"), 7)
         self.assertEqual(compose.count("condition: service_healthy"), 6)
-        self.assertIn('"127.0.0.1:8098:8098"', self.service_block(compose, "backend"))
+        backend_block = self.service_block(compose, "backend")
+        self.assertIn('"127.0.0.1:${BACKEND_HOST_PORT:-8098}:8098"', backend_block)
 
         for service in MAS_SERVICES:
             block = self.service_block(compose, service)
