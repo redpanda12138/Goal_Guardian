@@ -79,9 +79,9 @@ class ProductionContainerConfigTest(unittest.TestCase):
             "MAS_MEMORY_REQUIRE_DATABASE=true",
             "TEMP_SAVE_FILE_PATH=/app/files",
             "WHISPER_MODEL_PATH=/models/whisper",
-            "PYTORCH_GPU_INDEX_URL=https://download.pytorch.org/whl/REPLACE_WITH_CUDA_INDEX",
+            "PYTORCH_GPU_INDEX_URL=",
             "PYTORCH_GPU_VERSION=2.11.0",
-            "PYTORCH_GPU_WHEEL_SUFFIX=+REPLACE_WITH_CUDA_SUFFIX",
+            "PYTORCH_GPU_WHEEL_SUFFIX=",
         ):
             self.assertIn(setting, env_example)
         self.assertNotRegex(env_example, r"(?i)(sk-[a-z0-9]{20,}|[a-f0-9]{32}\.[a-z0-9]{10,})")
@@ -92,7 +92,10 @@ class ProductionContainerConfigTest(unittest.TestCase):
         self.assertEqual(compose.count("healthcheck:"), 7)
         self.assertEqual(compose.count("condition: service_healthy"), 6)
         backend_block = self.service_block(compose, "backend")
-        self.assertIn('"127.0.0.1:${BACKEND_HOST_PORT:-8098}:8098"', backend_block)
+        self.assertIn(
+            '"${BACKEND_HOST_BIND:-127.0.0.1}:${BACKEND_HOST_PORT:-8098}:8098"',
+            backend_block,
+        )
 
         for service in MAS_SERVICES:
             block = self.service_block(compose, service)

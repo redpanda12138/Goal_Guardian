@@ -21,7 +21,7 @@ services:
       MAS_MEMORY_REQUIRE_DATABASE: "true"
       MAS_OA_SCHEDULER_ENABLED: "true"
     ports:
-      - "127.0.0.1:${BACKEND_HOST_PORT:-8098}:8098"
+      - "${BACKEND_HOST_BIND:-127.0.0.1}:${BACKEND_HOST_PORT:-8098}:8098"
     volumes:
       - backend-files:/app/files
       - type: bind
