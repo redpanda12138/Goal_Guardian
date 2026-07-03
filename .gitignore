@@ -1,4 +1,5 @@
 /talkieai-server/.env
+/talkieai-server/.env.production
 /talkieai-server/mas/.env
 /talkieai-server/myenv/
 /talkieai-server/.pytest_cache/

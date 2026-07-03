@@ -14,6 +14,7 @@ for common_dir in (
         sys.path.insert(0, str(common_dir))
 
 from mas_memory_store import load_json, save_json, memory_exists
+from runtime_config import orchestration_enabled
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/extract"
@@ -734,5 +735,8 @@ async def reset_all_sessions():
 # === Startup Background Thread ===
 @app.on_event("startup")
 def startup_event():
+    if not orchestration_enabled():
+        print("OA orchestration loop disabled", flush=True)
+        return
     thread = threading.Thread(target=orchestration_loop, daemon=True)
     thread.start()
