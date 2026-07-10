@@ -109,6 +109,9 @@ class MASGatewayService:
                 return False
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.get(f"{base_url}/health", timeout=5)
+                if response.status_code == 200:
+                    return True
+                response = await client.get(f"{base_url}/openapi.json", timeout=5)
                 return response.status_code == 200
         except:
             return False

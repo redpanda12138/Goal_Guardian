@@ -269,8 +269,7 @@ onLoad((option: any) => {
   // 计算header高度，用于定位New Session按钮
   const instance = getCurrentInstance();
   const CustomBar = instance?.appContext.config.globalProperties.CustomBar || 88;
-  const StatusBar = instance?.appContext.config.globalProperties.StatusBar || 0;
-  headerTop.value = CustomBar + StatusBar;
+  headerTop.value = CustomBar;
   
   console.log('Onload')
   $bus.on("SendMessage", sendMessageHandler);
@@ -1030,7 +1029,7 @@ const scrollToBottom = () => {
   padding-top: 80rpx;
 
   &.chat-container--mas {
-    padding-top: 140rpx;
+    padding-top: 170rpx;
   }
 
   .mas-coach-dash {
@@ -1295,15 +1294,16 @@ const scrollToBottom = () => {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 10rpx 32rpx;
+  min-height: 96rpx;
+  padding: 14rpx 32rpx;
   background-color: rgba(250, 246, 255, 0.96);
   border-bottom: 1rpx solid rgba(124, 92, 191, 0.12);
   box-sizing: border-box;
   width: 100%;
   
   .action-btn-box {
-    min-height: 40rpx;
-    padding: 10rpx 28rpx;
+    min-height: 56rpx;
+    padding: 0 32rpx;
     display: flex;
     justify-content: center;
     align-items: center;

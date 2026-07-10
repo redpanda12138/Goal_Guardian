@@ -40,11 +40,12 @@ const handleTranslate = () => {
 <style scoped lang="less">
 .menu-container {
     display: flex;
-    padding: 12rpx 32rpx;
-    background-color: #FFF;
+    padding: 18rpx 32rpx 10rpx;
+    background-color: rgba(250, 246, 255, 0.98);
+    border-bottom: 1rpx solid rgba(124, 92, 191, 0.08);
 
     .menu-item {
-        background-color: rgba(242, 242, 242, 1);
+        background-color: rgba(255, 255, 255, 0.72);
         border-radius: 14rpx;
         display: flex;
         align-items: center;
