@@ -29,15 +29,19 @@ class WhisperVoiceProcessor:
 
         # 一键切换模型：
         # 1) WHISPER_MODEL_PATH: 指定绝对/相对路径（优先级最高）
-        # 2) WHISPER_MODEL_PROFILE: medium | offline（默认 medium）
+        # 2) WHISPER_MODEL_PROFILE: small-sing2eng | medium-sing2eng | offline（默认 small-sing2eng）
         custom_model_path = (os.environ.get("WHISPER_MODEL_PATH") or "").strip()
-        model_profile = (os.environ.get("WHISPER_MODEL_PROFILE") or "medium").strip().lower()
+        model_profile = (os.environ.get("WHISPER_MODEL_PROFILE") or "small-sing2eng").strip().lower()
 
         profile_to_dir = {
+            # Historical local directory name; README identifies it as ivabojic/whisper-small-sing2eng-translate.
+            "small-sing2eng": "whisper-model-offline",
+            "small": "whisper-model-offline",
+            "medium-sing2eng": "whisper-medium-sing2eng-translate",
             "medium": "whisper-medium-sing2eng-translate",
             "offline": "whisper-model-offline",
         }
-        profile_dir_name = profile_to_dir.get(model_profile, profile_to_dir["medium"])
+        profile_dir_name = profile_to_dir.get(model_profile, profile_to_dir["small-sing2eng"])
 
         if custom_model_path:
             local_model_path = custom_model_path
@@ -176,6 +180,7 @@ class WhisperVoiceProcessor:
 
             transcription = ""
             last_raw_from_model = ""
+            fallback_mode = os.environ.get("WHISPER_FALLBACK_MODE", "transcribe").strip().lower()
 
             # Processor+Model：先做与 test_sing2eng_download.py 完全一致的 README 式调用（CPU float32、不截断、不传 task），再 fallback
             if self.processor and self.model:
@@ -255,9 +260,9 @@ class WhisperVoiceProcessor:
                     logging.info(
                         f"Whisper 第1次(translate): raw_len={len(raw)}, normalized_ok={bool(transcription)}, sample={repr(_sample)}"
                     )
-                    # 第二次尝试：仍为 translate
-                    if not transcription:
-                        logging.info("Whisper 第二次尝试: task=translate, language=en")
+                    # 默认跳过重复 translate，避免失败场景重复跑同一类解码；需要兼容旧行为时可设 WHISPER_FALLBACK_MODE=translate_then_transcribe。
+                    if not transcription and fallback_mode in ("translate", "translate_then_transcribe"):
+                        logging.info("Whisper fallback: task=translate, language=en")
                         with torch.no_grad():
                             predicted_ids = self.model.generate(input_features, **gen_common)
                         raw = self.processor.batch_decode(
@@ -267,11 +272,11 @@ class WhisperVoiceProcessor:
                         transcription = self._normalize_transcription(raw)
                         _sample = (raw[:120] + "…") if len(raw) > 120 else raw
                         logging.info(
-                            f"Whisper 第2次(translate): raw_len={len(raw)}, normalized_ok={bool(transcription)}, sample={repr(_sample)}"
+                            f"Whisper fallback(translate): raw_len={len(raw)}, normalized_ok={bool(transcription)}, sample={repr(_sample)}"
                         )
-                    # 第三次尝试：transcribe 模式（仍用模型默认 generation_config，不加重 penalty）
-                    if not transcription:
-                        logging.info("Whisper 第三次尝试: task=transcribe")
+                    # 失败后转为 transcribe 模式，适合普通英文听写；设 WHISPER_FALLBACK_MODE=none 可关闭。
+                    if not transcription and fallback_mode in ("transcribe", "translate_then_transcribe"):
+                        logging.info("Whisper fallback: task=transcribe")
                         gen_transcribe = {**gen_common, "task": "transcribe"}
                         with torch.no_grad():
                             predicted_ids = self.model.generate(input_features, **gen_transcribe)
@@ -282,7 +287,7 @@ class WhisperVoiceProcessor:
                         transcription = self._normalize_transcription(raw)
                         _sample = (raw[:120] + "…") if len(raw) > 120 else raw
                         logging.info(
-                            f"Whisper 第3次(transcribe): raw_len={len(raw)}, normalized_ok={bool(transcription)}, sample={repr(_sample)}"
+                            f"Whisper fallback(transcribe): raw_len={len(raw)}, normalized_ok={bool(transcription)}, sample={repr(_sample)}"
                         )
             # 已改为仅用原始路径加载，不再生成预处理临时文件，无需清理
             # 模型在静音/极短音频时常只输出占位符 "-" 或全标点（如 "!!!"），已由 _normalize_transcription 统一处理

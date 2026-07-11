@@ -25,7 +25,7 @@ services:
     volumes:
       - backend-files:/app/files
       - type: bind
-        source: ${WHISPER_MODEL_HOST_PATH:-./talkieai-server/mas/whisper-medium-sing2eng-translate}
+        source: ${WHISPER_MODEL_HOST_PATH:-./talkieai-server/mas/whisper-model-offline}
         target: /models/whisper
         read_only: true
     depends_on:

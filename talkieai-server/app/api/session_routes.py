@@ -115,6 +115,8 @@ def standalone_voice_translate_api(
     db: Session = Depends(get_db),
     account_id: str = Depends(get_current_account),
 ):
+    from app.core.whisper_voice import whisper_processor
+
     """独立的语音转文字接口，不需要会话ID"""
     # 构建完整的音频文件路径
     audio_file_path = voice_file_get_path(dto.file_name)

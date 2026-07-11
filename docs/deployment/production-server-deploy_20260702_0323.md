@@ -94,7 +94,8 @@ ZHIPU_AI_API_KEY=replace-with-rotated-production-key
 
 TEMP_SAVE_FILE_PATH=/app/files
 WHISPER_MODEL_PATH=/models/whisper
-WHISPER_MODEL_HOST_PATH=/opt/goal-guardian/models/whisper-medium-sing2eng-translate
+WHISPER_MODEL_HOST_PATH=/opt/goal-guardian/models/whisper-small-sing2eng-translate
+WHISPER_MODEL_PROFILE=small-sing2eng
 
 BACKEND_HOST_BIND=127.0.0.1
 BACKEND_HOST_PORT=8098
@@ -118,7 +119,7 @@ MAS_OA_SCHEDULER_ENABLED=true
 示例：
 
 ```bash
-sudo mkdir -p /opt/goal-guardian/models/whisper-medium-sing2eng-translate
+sudo mkdir -p /opt/goal-guardian/models/whisper-small-sing2eng-translate
 sudo chown -R "$USER":"$USER" /opt/goal-guardian
 ```
 
