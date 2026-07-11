@@ -12,6 +12,7 @@ for common_dir in (
         sys.path.insert(0, str(common_dir))
 
 from mas_memory_store import load_json, save_json
+from prompt_guard import build_coach_prompt, safe_coach_reply
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/patient_goals"
@@ -373,21 +374,46 @@ async def receive_message(request: Request):
         selected_goal = patient_entry.get("selected_goal", "your selected goal")
 
     assistant_prompt = ""
+    assistant_fallback = "Thank you for sharing. Could you tell me a little more about that?"
     if turn_index == 7:
         # 只有在有目标的情况下才会执行到这里
         if has_goals:
-            assistant_prompt = f'The client chose the goal: "{selected_goal}". Ask about their positive experience with it. Don\'t use client name if available.'
+            assistant_prompt = build_coach_prompt(
+                user_input,
+                f'Ask about the client\'s positive experience with "{selected_goal}". Do not use their name.',
+            )
+            assistant_fallback = "What was a positive experience you had with this goal last week?"
         # 如果没有目标，已经在上面处理并返回了
     elif turn_index == 8:
-        assistant_prompt = f'Reflect warmly on the client\'s positive experience. Then ask: What was the most rewarding or enjoyable part of working on "{selected_goal}" last week? Don\'t mention goal explicitly, but rephrase it.'
+        assistant_prompt = build_coach_prompt(
+            user_input,
+            f'Reflect warmly on the positive experience. Then ask what was most rewarding or enjoyable about working on "{selected_goal}" last week. Rephrase the goal instead of naming it directly.',
+        )
+        assistant_fallback = "That sounds meaningful. What was the most rewarding or enjoyable part of working on it last week?"
     elif turn_index == 9:
-        assistant_prompt = f'Encourage deeper reflection. Ask about any challenges they faced with "{selected_goal}", and what they learned about themselves while working through those. Don\'t use client name if available. Don\'t mention goal explicitly, but rephrase it.'
+        assistant_prompt = build_coach_prompt(
+            user_input,
+            f'Encourage deeper reflection. Ask about any challenges with "{selected_goal}" and what the client learned about themselves. Do not use their name, and rephrase the goal instead of naming it directly.',
+        )
+        assistant_fallback = "What challenges came up as you worked on it, and what did you learn about yourself through that?"
     elif turn_index == 10:
-        assistant_prompt = f'Acknowledge their efforts so far. Then ask: How would you rate your success with "{selected_goal}" on a scale from 0% to 100%? Don\'t use client name if available. Don\'t mention goal explicitly, but rephrase it.'
+        assistant_prompt = build_coach_prompt(
+            user_input,
+            f'Acknowledge their effort. Ask how they would rate their success with "{selected_goal}" from 0% to 100%. Do not use their name, and rephrase the goal instead of naming it directly.',
+        )
+        assistant_fallback = "You have put real thought into this. How would you rate your success with it on a scale from 0% to 100%?"
     elif turn_index == 11:
-        assistant_prompt = f'Reflect gently on the percentage they shared. Follow up with: What made you choose that number? Don\'t mention goal explicitly, but rephrase it.'
+        assistant_prompt = build_coach_prompt(
+            user_input,
+            f'Reflect gently on the percentage they shared. Ask what made them choose that number. Rephrase "{selected_goal}" instead of naming it directly.',
+        )
+        assistant_fallback = "That rating makes sense as a way to reflect on your progress. What made you choose that number?"
     elif turn_index == 12:
-        assistant_prompt = f'Affirm the client’s reflections and thank them. End with an encouraging statement. Do not ask additional questions. Don\'t mention goal explicitly, but rephrase it.'
+        assistant_prompt = build_coach_prompt(
+            user_input,
+            f'Affirm the client\'s reflections and thank them. End with encouragement. Do not ask additional questions, and rephrase "{selected_goal}" instead of naming it directly.',
+        )
+        assistant_fallback = "Thank you for reflecting on your progress so openly. Your effort and awareness are important steps forward."
 
     assistant_reply = ""
     if turn_index < 13:
@@ -396,8 +422,11 @@ async def receive_message(request: Request):
                 *chat_history,
                 {"role": "user", "content": assistant_prompt}
             ]
-        assistant_reply = ask_gpt(full_prompt)       
-        #assistant_reply = assistant_prompt
+        try:
+            assistant_reply = safe_coach_reply(ask_gpt(full_prompt), assistant_fallback)
+        except Exception as e:
+            print(f"Error calling AI service in GRA receive_message: {e}", flush=True)
+            assistant_reply = assistant_fallback
         chat_history.append({"role": "assistant", "content": assistant_reply})
         try:
             oa_response = requests.post(OA_URL, json={

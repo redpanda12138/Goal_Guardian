@@ -217,6 +217,8 @@ const accountSetting = ref<AccountSettings>({
 const isMasSessionCompleted = ref(false);
 const coachDashboard = ref<Record<string, any> | null>(null);
 const coachDashboardLoading = ref(false);
+const MAS_META_REFRESH_COOLDOWN_MS = 1500;
+let lastMasMetaRefreshAt = 0;
 
 // 历史查看模式：从侧栏进入的只读对话，不显示输入栏与 New Session
 const isHistoryView = ref(false);
@@ -290,8 +292,7 @@ onShow(() => {
   
   // 如果是MAS会话，检查会话状态
   if (session.value.type === 'MAS' && session.value.id) {
-    checkMasSessionStatus();
-    loadCoachDashboard();
+    refreshMasSessionMeta();
   }
 });
 
@@ -311,6 +312,19 @@ const loadCoachDashboard = () => {
     .finally(() => {
       coachDashboardLoading.value = false;
     });
+};
+
+const refreshMasSessionMeta = (force = false) => {
+  if (session.value.type !== "MAS" || isHistoryView.value || !session.value.id) {
+    return;
+  }
+  const now = Date.now();
+  if (!force && now - lastMasMetaRefreshAt < MAS_META_REFRESH_COOLDOWN_MS) {
+    return;
+  }
+  lastMasMetaRefreshAt = now;
+  checkMasSessionStatus();
+  loadCoachDashboard();
 };
 
 const onCoachMarkComplete = (goalIndex: number) => {
@@ -598,9 +612,8 @@ const sendMessage = (message?: string, fileName?: string) => {
           isMasSessionCompleted.value = true;
         } else {
           // 即使没有completed标志，也检查一下状态
-          checkMasSessionStatus();
+          refreshMasSessionMeta(true);
         }
-        loadCoachDashboard();
       }
       // 录音识别发送成功后删除服务器上的录音文件
       if (fileName) {
@@ -675,6 +688,7 @@ const initData = (sessionId: string) => {
         nextTick(() => {
           scrollToBottom();
         });
+        refreshMasSessionMeta(true);
       })
       return;
     }
@@ -700,8 +714,7 @@ const initData = (sessionId: string) => {
     // 如果是MAS会话，检查会话状态
     if (session.value.type === 'MAS') {
       console.log("MAS session detected, checking status...");
-      checkMasSessionStatus();
-      loadCoachDashboard();
+      refreshMasSessionMeta();
     } else {
       console.log("Session type:", session.value.type, "- not MAS, skipping status check");
     }

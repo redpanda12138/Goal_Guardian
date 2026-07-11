@@ -15,6 +15,7 @@ for common_dir in (
         sys.path.insert(0, str(common_dir))
 
 from mas_memory_store import load_json, save_json
+from prompt_guard import build_coach_prompt, safe_coach_reply
 
 # === Configuration ===
 OA_URL = "http://oa:8000/receive_message"
@@ -242,9 +243,16 @@ async def receive_message(request: Request):
         
         return {"status": "done", "reason": "Did all turns", "turn_index": 15}
 
-    assistant_prompt = (
-        f"The client said: '{user_input}'. Thank them for their feedback! Tell them that we will take that into account. "
+    assistant_fallback = (
+        "Thank you for sharing that feedback. We will take it into account. "
         f"Your next weekly check-in will be on {next_review}. See you then!"
+    )
+    assistant_prompt = build_coach_prompt(
+        user_input,
+        (
+            "Thank the client for their feedback, say it will be taken into account, "
+            f"and tell them their next weekly check-in will be on {next_review}. Close warmly."
+        ),
     )
 
     # GPT generation placeholder
@@ -253,8 +261,11 @@ async def receive_message(request: Request):
                 *chat_history,
                 {"role": "user", "content": assistant_prompt}
             ]
-    assistant_reply = ask_gpt(full_prompt)
-    #assistant_reply = assistant_prompt
+    try:
+        assistant_reply = safe_coach_reply(ask_gpt(full_prompt), assistant_fallback)
+    except Exception as e:
+        print(f"Error calling AI service in SCA receive_message: {e}", flush=True)
+        assistant_reply = assistant_fallback
     chat_history.append({"role": "assistant", "content": assistant_reply})
     try:
         oa_response = requests.post(OA_URL, json={

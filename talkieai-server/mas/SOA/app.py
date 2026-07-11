@@ -12,6 +12,7 @@ for common_dir in (
         sys.path.insert(0, str(common_dir))
 
 from mas_memory_store import load_json, save_json
+from prompt_guard import build_coach_prompt, safe_coach_reply
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/patient_notes"
@@ -78,22 +79,32 @@ async def trigger(request: Request):
 
     preferred_name = notes.get("preferred_name") or "there"
 
-    system_prompt = "You are a warm, empathetic health coach opening a session."
+    system_prompt = (
+        "You are a warm, empathetic health coach opening a session. "
+        "Return only the message that should be shown to the client."
+    )
+    initial_fallback = (
+        f"Hi {preferred_name}! How are you feeling today? What's your energy level?"
+        if preferred_name and preferred_name != "there"
+        else "Hi there! How are you feeling today? What's your energy level?"
+    )
     initial_prompt = [
         {"role": "system", "content": system_prompt},
-        {"role": "assistant", "content": f"Greet '{preferred_name}' and ask about energy level."}
+        {
+            "role": "user",
+            "content": build_coach_prompt(
+                f"Preferred name: {preferred_name}",
+                "Greet the client warmly and ask about their energy level.",
+            ),
+        },
     ]
 
     # AI调用，添加异常处理
     try:
-        assistant_reply = ask_gpt(initial_prompt)
+        assistant_reply = safe_coach_reply(ask_gpt(initial_prompt), initial_fallback)
     except Exception as e:
         print(f"Error calling AI service: {e}", flush=True)
-        # 使用fallback消息，避免整个流程失败
-        if preferred_name and preferred_name != "there":
-            assistant_reply = f"Hi {preferred_name}! How are you feeling today? What's your energy level?"
-        else:
-            assistant_reply = "Hi there! How are you feeling today? What's your energy level?"
+        assistant_reply = initial_fallback
 
     chat_history = [{"role": "assistant", "content": assistant_reply}]
 
@@ -189,20 +200,49 @@ async def receive_message(request: Request):
     turn_index += 1
 
     assistant_prompt = ""
+    assistant_fallback = "Thanks for sharing. Could you tell me a little more about that?"
     if turn_index == 2:
-        assistant_prompt = f"The client said: '{user_input}'. If number, ask what it means. If mood, ask why."
+        assistant_prompt = build_coach_prompt(
+            user_input,
+            "If the client gave a number, ask what it means. If they described a mood, ask why. Keep it brief.",
+        )
+        assistant_fallback = "Thanks for sharing. Could you tell me a little more about what that means for you?"
     elif turn_index == 3:
-        assistant_prompt = f"The client said: '{user_input}'. Reflect empathetically and ask for a positive health moment from last week."
+        assistant_prompt = build_coach_prompt(
+            user_input,
+            "Reflect empathetically and ask for one positive health moment from last week.",
+        )
+        assistant_fallback = "I'm glad you shared that. What was one positive health moment from last week?"
     elif turn_index == 4:
         if user_input.strip():
-            assistant_prompt = f"The client said: '{user_input}'. Reflect positively and ask a light follow-up."
+            assistant_prompt = build_coach_prompt(
+                user_input,
+                "Reflect positively and ask one light follow-up question.",
+            )
+            assistant_fallback = "That sounds like a positive moment. What helped make that happen?"
         else:
-            assistant_prompt = f"The client didn’t share much. Use fallback: '{fallback_text}' to keep the conversation going."
+            assistant_prompt = build_coach_prompt(
+                user_input,
+                f"The client did not share much. Use this topic if useful: {fallback_text}. Ask a gentle follow-up.",
+            )
+            assistant_fallback = (
+                f"No worries. Could you tell me about something connected to {fallback_text} that felt positive recently?"
+                if fallback_text
+                else "No worries. Could you share one small thing that felt positive recently?"
+            )
     elif turn_index == 5:
         if user_input.strip():
-            assistant_prompt = f"The client said: '{user_input}'. Reflect positively. Do not say goodbye."
+            assistant_prompt = build_coach_prompt(
+                user_input,
+                "Reflect positively. Do not say goodbye and do not ask another question.",
+            )
+            assistant_fallback = "Thank you for reflecting on that. It is encouraging to notice these moments and what supports them."
         else:
-            assistant_prompt = "The client didn’t say much. Share a short encouraging comment without saying goodbye."
+            assistant_prompt = build_coach_prompt(
+                user_input,
+                "Share a short encouraging comment without saying goodbye.",
+            )
+            assistant_fallback = "Thank you for staying with the reflection. Even small observations can be useful."
 
     assistant_reply = ""
     if turn_index < 6:
@@ -212,11 +252,10 @@ async def receive_message(request: Request):
                 {"role": "user", "content": assistant_prompt}
             ]
         try:
-            assistant_reply = ask_gpt(full_prompt)
+            assistant_reply = safe_coach_reply(ask_gpt(full_prompt), assistant_fallback)
         except Exception as e:
             print(f"Error calling AI service in receive_message: {e}", flush=True)
-            # 使用fallback消息
-            assistant_reply = assistant_prompt
+            assistant_reply = assistant_fallback
         chat_history.append({"role": "assistant", "content": assistant_reply})
         try:
             oa_response = requests.post(OA_URL, json={
