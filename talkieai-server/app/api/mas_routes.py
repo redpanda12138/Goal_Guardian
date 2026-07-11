@@ -21,6 +21,13 @@ from app.core.logging import logging
 
 router = APIRouter()
 
+
+def _get_patient_id_and_release_db(db: Session, account_id: str) -> str:
+    mapping_service = PatientMappingService(db)
+    patient_id = mapping_service.get_or_create_patient_id(account_id)
+    db.close()
+    return patient_id
+
 # ========== MAS会话管理 ==========
 
 @router.post("/mas/sessions/create", name="Create MAS Session")
@@ -114,8 +121,7 @@ async def submit_notes(
     将account_id转换为patient_id，然后转发到MMA服务
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 转换数据格式：添加patient_id到每个笔记
         notes_data = []
@@ -149,8 +155,7 @@ async def get_patient_info(
     如果数据不存在，尝试从对话历史中自动提取
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         result = await MASGatewayService.call_mas_service(
             "mma",
@@ -257,8 +262,7 @@ async def get_patient_goals(
     如果数据不存在，尝试从对话历史中自动提取
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         result = await MASGatewayService.call_mas_service(
             "mma",
@@ -359,8 +363,7 @@ async def get_patient_next_review_time(
     - 如果该预约已触发，则返回 `next_review_time=None`
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
 
         result = await MASGatewayService.call_mas_service(
             "oa",
@@ -448,11 +451,11 @@ async def trigger_session(
     如果提供了patient_id，使用提供的；否则使用当前用户的patient_id
     """
     try:
-        mapping_service = PatientMappingService(db)
         if dto.patient_id:
             patient_id = dto.patient_id
+            db.close()
         else:
-            patient_id = mapping_service.get_or_create_patient_id(account_id)
+            patient_id = _get_patient_id_and_release_db(db, account_id)
         
         result = await MASGatewayService.call_mas_service(
             "soa",
@@ -479,8 +482,7 @@ async def send_message(
     这里简化处理：依次尝试SOA、GRA、SCA，直到成功
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         message_data = {
             "patient_id": patient_id,
@@ -540,8 +542,7 @@ async def get_current_session(
     从OA获取会话状态（需要OA提供此接口）
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 从OA获取会话状态
         result = await MASGatewayService.call_mas_service(
@@ -566,8 +567,7 @@ async def get_conversation_history(
     从OA的goal_reviews.json获取该患者的所有对话记录
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 从OA获取对话历史
         result = await MASGatewayService.call_mas_service(
@@ -592,8 +592,7 @@ async def get_session_summaries(
     从SSA获取该患者的所有会话摘要
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 从SSA获取会话摘要
         result = await MASGatewayService.call_mas_service(
@@ -621,8 +620,7 @@ async def create_schedule(
     将预约数据发送到OA服务
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 转换数据格式：添加patient_id
         # - 若有 date：按预约时间触发

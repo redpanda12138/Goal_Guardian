@@ -392,6 +392,7 @@ class CoachDashboardService:
         window = _normalize_window(window)
         mapping = PatientMappingService(db)
         patient_id = mapping.get_or_create_patient_id(account_id)
+        db.close()
 
         goals_data: Dict[str, Any] = {}
         try:
@@ -436,6 +437,7 @@ class CoachDashboardService:
         next_workout = _next_workout_from_goals(smart_goals, done_indices)
         weekly_review = _build_weekly_review(ledger, total)
         overall_review = _build_overall_review(ledger, total, window)
+        db.close()
 
         next_review_payload: Dict[str, Any] = {}
         try:
@@ -485,9 +487,9 @@ class CoachDashboardService:
         goal_index: Optional[int] = None,
         note: Optional[str] = None,
     ) -> Dict[str, Any]:
-        ledger = _load_ledger(db, account_id)
         mapping = PatientMappingService(db)
         patient_id = mapping.get_or_create_patient_id(account_id)
+        db.close()
 
         goals_data: Dict[str, Any] = {}
         try:
@@ -499,6 +501,7 @@ class CoachDashboardService:
 
         smart_goals = goals_data.get("smart_goals") or []
         total = len(smart_goals) if isinstance(smart_goals, list) else 0
+        ledger = _load_ledger(db, account_id)
 
         if event_type not in {"goal_completed", "goal_skipped", "progress_refreshed"}:
             return {
