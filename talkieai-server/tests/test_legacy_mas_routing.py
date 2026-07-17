@@ -257,6 +257,45 @@ def test_oa_production_wiring_still_reports_turn_six_as_soa():
     strict=True,
     reason="Known legacy baseline: timeout after a remote commit can retry the same request through another agent and duplicate side effects.",
 )
-def test_api_route_timeout_does_not_fallback_to_another_agent():
-    source = (SERVER_ROOT / "app" / "api" / "mas_routes.py").read_text(encoding="utf-8")
-    assert "SOA message failed, trying other agents" not in source
+def test_api_route_timeout_does_not_fallback_to_another_agent(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("SQL_ECHO", "false")
+    monkeypatch.setenv("TOKEN_SECRET", "test-secret")
+    monkeypatch.setenv("TOKEN_EXPIRE_TIME", "3600")
+    mas_routes = import_server_module(monkeypatch, "app.api.mas_routes")
+    gateway_errors = import_server_module(
+        monkeypatch, "app.services.mas.gateway_errors"
+    )
+    service_calls = []
+
+    async def call_mas_service(service_name, endpoint, **_kwargs):
+        service_calls.append(service_name)
+        if service_name == "soa":
+            raise gateway_errors.MASGatewayTimeoutError(
+                service_name,
+                endpoint,
+                "timeout after remote commit",
+                timeout_seconds=120.0,
+            )
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        mas_routes,
+        "_get_patient_id_and_release_db",
+        lambda _db, _account_id: "patient-1",
+    )
+    monkeypatch.setattr(
+        mas_routes.MASGatewayService,
+        "call_mas_service",
+        staticmethod(call_mas_service),
+    )
+
+    asyncio.run(
+        mas_routes.send_message(
+            mas_routes.SendMessageDTO(user_input="message", turn_index=6),
+            db=object(),
+            account_id="account-1",
+        )
+    )
+
+    assert service_calls == ["soa"]
