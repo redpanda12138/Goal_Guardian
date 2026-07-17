@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import importlib.util
 import sys
 import types
@@ -6,13 +7,24 @@ from pathlib import Path
 
 import pytest
 
-from app.services.mas.legacy_routing import (
-    select_legacy_mas_agent,
-    should_retry_soa_with_gra,
-)
-
-
 SERVER_ROOT = Path(__file__).resolve().parents[1]
+
+
+def import_server_module(monkeypatch, module_name):
+    server_app_root = (SERVER_ROOT / "app").resolve()
+    loaded_app = sys.modules.get("app")
+    loaded_file = Path(getattr(loaded_app, "__file__", "")).resolve()
+    if loaded_app is not None and server_app_root not in loaded_file.parents:
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.syspath_prepend(str(SERVER_ROOT))
+    return importlib.import_module(module_name)
+
+
+@pytest.fixture
+def legacy_routing(monkeypatch):
+    return import_server_module(monkeypatch, "app.services.mas.legacy_routing")
 
 
 @pytest.mark.parametrize(
@@ -27,13 +39,13 @@ SERVER_ROOT = Path(__file__).resolve().parents[1]
     ],
 )
 def test_legacy_route_selects_the_existing_agent_at_stage_boundaries(
-    turn_index, expected_agent
+    turn_index, expected_agent, legacy_routing
 ):
-    assert select_legacy_mas_agent(turn_index) == expected_agent
+    assert legacy_routing.select_legacy_mas_agent(turn_index) == expected_agent
 
 
-def test_legacy_soa_compatibility_response_retries_with_gra_only():
-    assert should_retry_soa_with_gra(
+def test_legacy_soa_compatibility_response_retries_with_gra_only(legacy_routing):
+    assert legacy_routing.should_retry_soa_with_gra(
         {"status": "error", "reason": "should be sent to GRA"}
     )
 
@@ -47,8 +59,10 @@ def test_legacy_soa_compatibility_response_retries_with_gra_only():
         {"status": "ok", "reason": "should be sent to GRA"},
     ],
 )
-def test_legacy_timeout_or_non_compatibility_result_does_not_retry_with_gra(result):
-    assert not should_retry_soa_with_gra(result)
+def test_legacy_timeout_or_non_compatibility_result_does_not_retry_with_gra(
+    result, legacy_routing
+):
+    assert not legacy_routing.should_retry_soa_with_gra(result)
 
 
 @pytest.fixture
