@@ -90,6 +90,8 @@ class MASGatewayService:
                 service_name,
                 endpoint,
                 f"MAS服务调用失败: HTTP {e.response.status_code}",
+                status_code=e.response.status_code,
+                cause=e,
             ) from e
         except httpx.TimeoutException as e:
             logging.error(
@@ -99,18 +101,20 @@ class MASGatewayService:
                 service_name,
                 endpoint,
                 f"MAS服务超时（>{read_sec:.0f}s），请检查 SOA/GRA/SCA 或大模型 API 是否正常",
+                timeout_seconds=read_sec,
+                cause=e,
             ) from e
         except httpx.RequestError as e:
             logging.error(f"MAS service request error: {service_name} {endpoint} - {e}")
             raise MASGatewayTransportError(
-                service_name, endpoint, f"MAS服务连接失败: {str(e)}"
+                service_name, endpoint, f"MAS服务连接失败: {str(e)}", cause=e
             ) from e
         except MASGatewayError:
             raise
         except Exception as e:
             logging.error(f"MAS service call failed: {service_name} {endpoint} - {e}")
             raise MASGatewayUnexpectedError(
-                service_name, endpoint, f"MAS服务调用失败: {str(e)}"
+                service_name, endpoint, f"MAS服务调用失败: {str(e)}", cause=e
             ) from e
     
     @staticmethod

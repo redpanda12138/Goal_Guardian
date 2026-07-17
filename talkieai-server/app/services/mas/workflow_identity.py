@@ -1,6 +1,11 @@
 """Pure identity and ownership helpers for the new MAS workflow boundary."""
+import json
+import re
 import uuid
 from typing import Any
+
+
+IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$"
 
 
 class SessionOwnershipError(PermissionError):
@@ -12,8 +17,18 @@ def derive_thread_id(account_id: str, mas_session_id: str, workflow_version: str
     components = (account_id, mas_session_id, workflow_version)
     if any(not isinstance(component, str) or not component for component in components):
         raise ValueError("account, MAS session, and workflow version are required")
-    seed = "goalguardian.workflow:" + ":".join(components)
+    seed = json.dumps(
+        ["goalguardian.workflow", *components],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     return "ggwf-" + uuid.uuid5(uuid.NAMESPACE_URL, seed).hex
+
+
+def validate_stable_identifier(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(IDENTIFIER_PATTERN, value):
+        raise ValueError(f"{field_name} must be a stable identifier")
+    return value
 
 
 def validate_session_ownership(
@@ -27,3 +42,30 @@ def validate_session_ownership(
     ):
         raise SessionOwnershipError("MAS session does not belong to this account")
     return session
+
+
+class WorkflowSessionOwnershipService:
+    """Query-bound validation for an active MAS session owned by an account."""
+
+    def __init__(self, db: Any, session_model: Any = None):
+        self.db = db
+        self.session_model = session_model
+
+    def get_owned_active_mas_session(self, account_id: str, mas_session_id: str) -> Any:
+        model = self.session_model
+        if model is None:
+            from app.db.chat_entities import MessageSessionEntity
+
+            model = MessageSessionEntity
+        session = (
+            self.db.query(model)
+            .filter_by(
+                id=mas_session_id,
+                account_id=account_id,
+                type="MAS",
+                completed=0,
+                deleted=0,
+            )
+            .first()
+        )
+        return validate_session_ownership(session, account_id, mas_session_id)

@@ -1,8 +1,10 @@
 """Versioned HTTP and action-boundary contracts for the future MAS workflow."""
 from enum import Enum
-from typing import Any, Dict, List, Optional
+import math
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, root_validator, validator
+from app.services.mas.workflow_json import ensure_json_object
 
 
 IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$"
@@ -33,6 +35,7 @@ class ToolResultStatus(str, Enum):
 class WorkflowMessageRequest(BaseModel):
     """API request boundary for a new workflow message; not checkpoint state."""
 
+    contract_version: Literal[CONTRACT_VERSION] = CONTRACT_VERSION
     mas_session_id: str
     request_id: str
     workflow_version: str = CONTRACT_VERSION
@@ -64,33 +67,44 @@ class WorkflowMessageRequest(BaseModel):
 class ToolRequest(BaseModel):
     """A proposed tool call. This model does not execute a tool."""
 
-    contract_version: str = CONTRACT_VERSION
+    contract_version: Literal[CONTRACT_VERSION] = CONTRACT_VERSION
     tool_name: ToolName
     arguments: Dict[str, Any] = Field(default_factory=dict)
     requires_confirmation: bool = False
 
-    @validator("requires_confirmation")
-    def require_confirmation_for_writes(cls, value: bool, values: Dict[str, Any]) -> bool:
+    @validator("arguments")
+    def validate_arguments(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return ensure_json_object(value)
+
+    @root_validator
+    def require_confirmation_for_writes(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         write_tools = {ToolName.MARK_GOAL_COMPLETE, ToolName.RESCHEDULE_REVIEW}
-        if values.get("tool_name") in write_tools and value is not True:
+        if (
+            values.get("tool_name") in write_tools
+            and values.get("requires_confirmation") is not True
+        ):
             raise ValueError("write tools require confirmation")
-        return value
+        return values
 
 
 class ToolResult(BaseModel):
     """Versioned result contract for a tool call after a future executor runs it."""
 
-    contract_version: str = CONTRACT_VERSION
+    contract_version: Literal[CONTRACT_VERSION] = CONTRACT_VERSION
     tool_name: ToolName
     status: ToolResultStatus
     payload: Dict[str, Any] = Field(default_factory=dict)
     error_code: Optional[str] = None
 
+    @validator("payload")
+    def validate_payload(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return ensure_json_object(value)
+
 
 class RetrievalResult(BaseModel):
     """Versioned retrieval boundary; retrieval is not connected in Batch 1."""
 
-    contract_version: str = CONTRACT_VERSION
+    contract_version: Literal[CONTRACT_VERSION] = CONTRACT_VERSION
     retrieval_id: str
     source_id: str
     content: str
@@ -101,11 +115,21 @@ class RetrievalResult(BaseModel):
     def validate_retrieval_identifier(cls, value: str) -> str:
         return WorkflowMessageRequest.validate_identifier(value)
 
+    @validator("score")
+    def validate_score(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("score must be finite")
+        return value
+
+    @validator("metadata")
+    def validate_metadata(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return ensure_json_object(value)
+
 
 class AgentDecision(BaseModel):
     """A side-effect-free, versioned decision proposed by an agent."""
 
-    contract_version: str = CONTRACT_VERSION
+    contract_version: Literal[CONTRACT_VERSION] = CONTRACT_VERSION
     kind: DecisionKind
     message: Optional[str] = None
     tool_request: Optional[ToolRequest] = None
@@ -125,6 +149,14 @@ class AgentDecision(BaseModel):
 
         if kind == DecisionKind.AWAIT_CONFIRMATION and not tool_request.requires_confirmation:
             raise ValueError("confirmation decisions require a confirmation-gated tool")
+
+        write_tools = {ToolName.MARK_GOAL_COMPLETE, ToolName.RESCHEDULE_REVIEW}
+        if (
+            kind == DecisionKind.REQUEST_TOOL
+            and tool_request is not None
+            and tool_request.tool_name in write_tools
+        ):
+            raise ValueError("write tools must await confirmation")
 
         if kind in {DecisionKind.REPLY, DecisionKind.CLARIFY, DecisionKind.CLOSE} and not message:
             raise ValueError("message decisions require a message")

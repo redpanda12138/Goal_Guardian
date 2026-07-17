@@ -185,3 +185,78 @@ def test_legacy_gra_deduplicates_repeated_content_not_request_identifier(
 
     assert first["status"] == second["status"] == "already_processed"
     assert persistence_calls == []
+
+
+def test_legacy_gra_turn_12_persists_user_message_then_triggers_sca(
+    legacy_gra_module, monkeypatch
+):
+    persistence_calls = []
+    trigger_calls = []
+
+    monkeypatch.setattr(
+        legacy_gra_module,
+        "load_memory",
+        lambda: [
+            {
+                "patient_id": "patient-1",
+                "chat_history": [],
+                "selected_goal": "walk daily",
+                "smart_goals": ["Walk daily"],
+            }
+        ],
+    )
+
+    async def persist_oa_message(url, payload, label, patient_id, turn_index):
+        persistence_calls.append((url, label))
+        return True
+
+    async def run_blocking(func, *args, **kwargs):
+        if func is legacy_gra_module.requests.post:
+            trigger_calls.append((args, kwargs))
+            return types.SimpleNamespace(status_code=200)
+        return "unused"
+
+    monkeypatch.setattr(legacy_gra_module, "persist_oa_message", persist_oa_message)
+    monkeypatch.setattr(legacy_gra_module, "run_blocking", run_blocking)
+    monkeypatch.setattr(legacy_gra_module, "save_message", lambda _record: None)
+
+    result = asyncio.run(
+        legacy_gra_module._receive_message_locked(
+            {"patient_id": "patient-1", "user_input": "closing reflection", "turn_index": 12}
+        )
+    )
+
+    assert result["turn_index"] == 13
+    assert persistence_calls == [(legacy_gra_module.OA_USER_URL, "user message")]
+    assert trigger_calls[0][0][0] == legacy_gra_module.SCA_URL
+
+
+def test_chat_service_production_wiring_uses_its_distinct_turn_six_route():
+    source = (SERVER_ROOT / "app" / "services" / "chat_service.py").read_text(
+        encoding="utf-8"
+    )
+    assert "selected_agent = select_legacy_mas_agent(current_turn_index)" in source
+    assert "if turn_index <= 5:" in (
+        SERVER_ROOT / "app" / "services" / "mas" / "legacy_routing.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_api_route_production_wiring_still_sends_turn_six_to_soa():
+    source = (SERVER_ROOT / "app" / "api" / "mas_routes.py").read_text(encoding="utf-8")
+    assert "if dto.turn_index <= 6:" in source
+    assert '"soa"' in source
+
+
+def test_oa_production_wiring_still_reports_turn_six_as_soa():
+    source = (SERVER_ROOT / "mas" / "OA" / "app.py").read_text(encoding="utf-8")
+    assert "if turn_index <= 6:" in source
+    assert 'current_agent = "SOA"' in source
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Known legacy baseline: timeout after a remote commit can retry the same request through another agent and duplicate side effects.",
+)
+def test_api_route_timeout_does_not_fallback_to_another_agent():
+    source = (SERVER_ROOT / "app" / "api" / "mas_routes.py").read_text(encoding="utf-8")
+    assert "SOA message failed, trying other agents" not in source
