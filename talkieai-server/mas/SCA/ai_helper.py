@@ -12,6 +12,25 @@ ZHIPU_AI_API_KEY = os.getenv('ZHIPU_AI_API_KEY', '')
 ZHIPU_AI_MODEL = os.getenv('ZHIPU_AI_MODEL', 'glm-4')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4.1')
 
+_openai_client = None
+_zhipu_client = None
+
+
+def _get_openai_client():
+    global _openai_client
+    if _openai_client is None:
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
+
+
+def _get_zhipu_client():
+    global _zhipu_client
+    if _zhipu_client is None:
+        from zhipuai import ZhipuAI
+        _zhipu_client = ZhipuAI(api_key=ZHIPU_AI_API_KEY)
+    return _zhipu_client
+
 
 def ask_ai(messages: List[Dict[str, str]], temperature: float = 0.7, tools: Optional[List] = None) -> str:
     """
@@ -33,9 +52,7 @@ def ask_ai(messages: List[Dict[str, str]], temperature: float = 0.7, tools: Opti
 
 def _ask_openai(messages: List[Dict[str, str]], temperature: float = 0.7, tools: Optional[List] = None) -> str:
     """调用OpenAI API"""
-    from openai import OpenAI
-    
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = _get_openai_client()
     
     params = {
         "model": OPENAI_MODEL,
@@ -63,11 +80,6 @@ def _ask_openai(messages: List[Dict[str, str]], temperature: float = 0.7, tools:
 
 def _ask_zhipu(messages: List[Dict[str, str]], temperature: float = 0.7) -> str:
     """调用智谱AI API"""
-    try:
-        from zhipuai import ZhipuAI
-    except ImportError:
-        raise ImportError("zhipuai package not installed. Run: pip install zhipuai")
-    
     if not ZHIPU_AI_API_KEY:
         raise ValueError("ZHIPU_AI_API_KEY environment variable is not set")
     
@@ -88,7 +100,7 @@ def _ask_zhipu(messages: List[Dict[str, str]], temperature: float = 0.7) -> str:
         
         converted_messages.append({"role": role, "content": content})
     
-    client = ZhipuAI(api_key=ZHIPU_AI_API_KEY)
+    client = _get_zhipu_client()
     
     response = client.chat.completions.create(
         model=ZHIPU_AI_MODEL,

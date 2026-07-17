@@ -1,4 +1,6 @@
 from pathlib import Path
+import asyncio
+import functools
 import os
 import sys
 import time
@@ -37,6 +39,11 @@ app = FastAPI()
 def ask_gpt(messages):
     """统一的AI调用接口，支持OpenAI GPT和智谱AI"""
     return ask_ai(messages, temperature=0.7)
+
+
+async def run_blocking(func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 
 # === Memory Handlers ===
@@ -120,7 +127,7 @@ async def trigger(request: Request):
     ]
 
     # GPT generation placeholder
-    assistant_reply = ask_gpt(initial_prompt)
+    assistant_reply = await run_blocking(ask_gpt, initial_prompt)
     #assistant_reply = "Thank you for this session"
 
     chat_history = [{"role": "assistant", "content": assistant_reply}]
@@ -204,7 +211,7 @@ async def receive_message(request: Request):
 
     # 将用户消息同步到 OA 的 goal_reviews.json（role: user）
     try:
-        oa_user_resp = requests.post(OA_USER_URL, json={
+        oa_user_resp = await run_blocking(requests.post, OA_USER_URL, json={
             "patient_id": patient_id,
             "turn_index": turn_index,
             "user_input": user_input
@@ -224,7 +231,7 @@ async def receive_message(request: Request):
     if(turn_index >= 15):
         # 会话已结束，更新OA中的turn_index并保存
         try:
-            oa_response = requests.post(OA_URL, json={
+            oa_response = await run_blocking(requests.post, OA_URL, json={
                 "patient_id": patient_id,
                 "turn_index": 15,  # 设置为15表示会话已结束
                 "message": "Session completed."
@@ -262,13 +269,13 @@ async def receive_message(request: Request):
                 {"role": "user", "content": assistant_prompt}
             ]
     try:
-        assistant_reply = safe_coach_reply(ask_gpt(full_prompt), assistant_fallback)
+        assistant_reply = safe_coach_reply(await run_blocking(ask_gpt, full_prompt), assistant_fallback)
     except Exception as e:
         print(f"Error calling AI service in SCA receive_message: {e}", flush=True)
         assistant_reply = assistant_fallback
     chat_history.append({"role": "assistant", "content": assistant_reply})
     try:
-        oa_response = requests.post(OA_URL, json={
+        oa_response = await run_blocking(requests.post, OA_URL, json={
             "patient_id": patient_id,
             "turn_index": turn_index,
             "message": assistant_reply
@@ -287,4 +294,8 @@ async def receive_message(request: Request):
         "chat_history": chat_history
     })
 
-    return {"status": "message processed", "turn_index": turn_index}
+    return {
+        "status": "message processed",
+        "turn_index": turn_index,
+        "assistant_message": assistant_reply,
+    }

@@ -244,22 +244,20 @@ class ChatService:
                 )
             )
             
-            # 从OA获取第一条消息（需要等待一下让SOA处理完成）
-            import time
-            time.sleep(1)  # 等待SOA处理
-            
-            # 获取对话历史中的第一条消息
-            history_data = loop.run_until_complete(
-                MASGatewayService.call_mas_service(
-                    "oa",
-                    f"/conversation_history/{patient_id}",
-                    method="GET"
+            greeting_message = str(result_data.get("assistant_message") or "").strip()
+            if not greeting_message:
+                # Compatibility fallback for an older SOA deployment that does not
+                # yet return the generated greeting in its trigger response.
+                history_data = loop.run_until_complete(
+                    MASGatewayService.call_mas_service(
+                        "oa",
+                        f"/conversation_history/{patient_id}",
+                        method="GET"
+                    )
                 )
-            )
-            
-            if history_data.get("status") == "ok" and history_data.get("chat_history"):
-                greeting_message = history_data["chat_history"][0].get("content", "Hello! How can I help you today?")
-            else:
+                if history_data.get("status") == "ok" and history_data.get("chat_history"):
+                    greeting_message = history_data["chat_history"][0].get("content", "")
+            if not greeting_message:
                 greeting_message = "Hello! I'm your health coach. How are you feeling today?"
             
             sequence = self.__get_message_sequence(session_id)
@@ -569,31 +567,6 @@ class ChatService:
         self.db.add(add_account_message)
         self.db.flush()  # 立即 flush，使后续 __get_message_sequence 能取到本条，避免助手消息拿到相同 sequence 导致排序错乱
         
-        # 先保存user消息到OA的goal_reviews.json，这样MMA可以从完整的对话历史中提取patient info和goals
-        try:
-            result = loop.run_until_complete(
-                MASGatewayService.call_mas_service(
-                    "oa",
-                    "/receive_user_message",
-                    data={
-                        "patient_id": patient_id,
-                        "user_input": send_message_content,
-                        "turn_index": current_turn_index
-                    }
-                )
-            )
-            from app.core.logging import logging
-            if result.get("status") == "ok":
-                logging.info(f"✅ Saved user message to OA for patient {patient_id}: {result}")
-            else:
-                logging.warning(f"⚠️ OA returned non-ok status: {result}")
-        except Exception as e:
-            from app.core.logging import logging
-            import traceback
-            logging.error(f"❌ Failed to save user message to OA: {e}")
-            logging.error(f"Traceback: {traceback.format_exc()}")
-            # 继续执行，不影响主流程
-        
         # 发送消息到MAS服务
         message_data = {
             "patient_id": patient_id,
@@ -670,10 +643,39 @@ class ChatService:
                 "create_time": date_to_str(add_system_message.create_time),
                 "completed": True,
             }
-        
-        # 等待一下让MAS处理完成
-        import time
-        time.sleep(0.5)
+
+        # Normal agent turns already wait for the model and persist the reply to OA.
+        # Use that reply directly instead of issuing another status request followed
+        # by a full conversation-history request. Transition turns return an empty
+        # message and continue through the compatibility path below.
+        direct_assistant_message = (
+            str(result_data.get("assistant_message") or "").strip()
+            if result_data
+            else ""
+        )
+        if direct_assistant_message:
+            sequence = self.__get_message_sequence(session_id)
+            add_system_message = self.__add_system_message(
+                session_id,
+                account_id,
+                direct_assistant_message,
+                "",
+                sequence + 1,
+            )
+            self.db.add(add_account_message)
+            self.db.add(add_system_message)
+            self.db.commit()
+            self.db.flush()
+            self.__refresh_session_message_count(session_id)
+            return {
+                "data": direct_assistant_message,
+                "id": add_system_message.id,
+                "session_id": session_id,
+                "send_message_id": send_message_id,
+                "send_message_content": send_message_content,
+                "create_time": date_to_str(add_system_message.create_time),
+                "completed": False,
+            }
         
         # 再次检查会话状态，确保会话没有在MAS处理过程中结束
         try:

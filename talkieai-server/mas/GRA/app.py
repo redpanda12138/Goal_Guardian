@@ -1,4 +1,6 @@
 from pathlib import Path
+import asyncio
+import functools
 import sys
 import requests, json, threading
 from fastapi import FastAPI, Request  # type: ignore
@@ -32,6 +34,11 @@ app = FastAPI()
 def ask_gpt(messages):
     """统一的AI调用接口，支持OpenAI GPT和智谱AI"""
     return ask_ai(messages, temperature=0.7)
+
+
+async def run_blocking(func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 
 # === Goal Selection Helper ===
@@ -185,7 +192,7 @@ async def trigger(request: Request):
     print(f"GRA was triggered to do weekly SMART goal review for patient {patient_id}", flush=True)
 
     try:
-        response = requests.get(f"{MMA_URL}/{patient_id}")
+        response = await run_blocking(requests.get, f"{MMA_URL}/{patient_id}")
         if response.status_code == 200:
             response_data = response.json()
             print(f"Retrieved {response_data} from MMA for patient {patient_id}", flush=True)
@@ -220,7 +227,7 @@ async def trigger(request: Request):
     ]
 
     # GPT generation placeholder
-    assistant_reply = ask_gpt(initial_prompt)
+    assistant_reply = await run_blocking(ask_gpt, initial_prompt)
     #assistant_reply = "Let's review your goals from the last session."
     chat_history = [{"role": "assistant", "content": assistant_reply}]
 
@@ -232,7 +239,7 @@ async def trigger(request: Request):
 
     # 同步发送消息到OA，确保turn_index正确更新
     try:
-        oa_response = requests.post(OA_URL, json={
+        oa_response = await run_blocking(requests.post, OA_URL, json={
             "patient_id": patient_id,
             "turn_index": turn_index,
             "message": assistant_reply
@@ -288,7 +295,7 @@ async def receive_message(request: Request):
 
     # 将用户消息同步到 OA 的 goal_reviews.json（role: user）
     try:
-        oa_user_resp = requests.post(OA_USER_URL, json={
+        oa_user_resp = await run_blocking(requests.post, OA_USER_URL, json={
             "patient_id": patient_id,
             "turn_index": turn_index,
             "user_input": user_input
@@ -310,7 +317,7 @@ async def receive_message(request: Request):
     if turn_index == 7:
         if has_goals:
             # 有目标：智能识别用户选择的目标
-            selected_goal, is_valid = extract_goal_from_input(user_input, smart_goals)
+            selected_goal, is_valid = await run_blocking(extract_goal_from_input, user_input, smart_goals)
             patient_entry["selected_goal"] = selected_goal
             
             if not is_valid:
@@ -325,7 +332,7 @@ async def receive_message(request: Request):
                 selected_goal = "wants_to_set_goals"
                 # 直接触发SCA，跳过后续的目标审查流程
                 try:
-                    oa_response = requests.post(SCA_URL, json={
+                    oa_response = await run_blocking(requests.post, SCA_URL, json={
                         "patient_id": patient_id,
                         "turn_index": turn_index,
                         "agent_to_trigger": "SCA"
@@ -351,7 +358,7 @@ async def receive_message(request: Request):
                 selected_goal = "no_goals_set"
                 # 直接触发SCA
                 try:
-                    oa_response = requests.post(SCA_URL, json={
+                    oa_response = await run_blocking(requests.post, SCA_URL, json={
                         "patient_id": patient_id,
                         "turn_index": turn_index,
                         "agent_to_trigger": "SCA"
@@ -423,13 +430,13 @@ async def receive_message(request: Request):
                 {"role": "user", "content": assistant_prompt}
             ]
         try:
-            assistant_reply = safe_coach_reply(ask_gpt(full_prompt), assistant_fallback)
+            assistant_reply = safe_coach_reply(await run_blocking(ask_gpt, full_prompt), assistant_fallback)
         except Exception as e:
             print(f"Error calling AI service in GRA receive_message: {e}", flush=True)
             assistant_reply = assistant_fallback
         chat_history.append({"role": "assistant", "content": assistant_reply})
         try:
-            oa_response = requests.post(OA_URL, json={
+            oa_response = await run_blocking(requests.post, OA_URL, json={
                 "patient_id": patient_id,
                 "turn_index": turn_index,
                 "message": assistant_reply
@@ -446,7 +453,7 @@ async def receive_message(request: Request):
         # 所以这里需要同时检查 turn_index == 13 和 turn_index == 14，以确保能触发 SCA
         agent_to_trigger = "SCA"
         try:
-            oa_response = requests.post(SCA_URL, json={
+            oa_response = await run_blocking(requests.post, SCA_URL, json={
                 "patient_id": patient_id,
                 "turn_index": turn_index,
                 "agent_to_trigger": agent_to_trigger
@@ -454,8 +461,7 @@ async def receive_message(request: Request):
             if oa_response.status_code == 200:
                 print(f"Triggered {agent_to_trigger} for patient {patient_id} (turn {turn_index})", flush=True)
                 # 等待一下，确保SCA的消息已经到达OA并更新turn_index
-                import time
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
             else:
                 print(f"Failed to trigger {agent_to_trigger} for patient {patient_id} (status {oa_response.status_code})", flush=True)
         except Exception as e:
@@ -471,4 +477,8 @@ async def receive_message(request: Request):
         "selected_goal": selected_goal
     })
 
-    return {"status": "message processed", "turn_index": turn_index}
+    return {
+        "status": "message processed",
+        "turn_index": turn_index,
+        "assistant_message": assistant_reply,
+    }

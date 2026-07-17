@@ -180,7 +180,9 @@ class WhisperVoiceProcessor:
 
             transcription = ""
             last_raw_from_model = ""
-            fallback_mode = os.environ.get("WHISPER_FALLBACK_MODE", "transcribe").strip().lower()
+            # Extra decode attempts are opt-in because each fallback can nearly double
+            # recognition latency on CPU-only deployments.
+            fallback_mode = os.environ.get("WHISPER_FALLBACK_MODE", "none").strip().lower()
 
             # Processor+Model：先做与 test_sing2eng_download.py 完全一致的 README 式调用（CPU float32、不截断、不传 task），再 fallback
             if self.processor and self.model:
@@ -191,16 +193,14 @@ class WhisperVoiceProcessor:
                     sampling_rate=sample_rate,
                     return_tensors="pt",
                 )
-                # 测试脚本在 CPU float32 下 generate，不 to(device/dtype)；此处对齐：临时 CPU float32 推理
-                input_features_readme = proc_readme.input_features
-                _saved_device = next(self.model.parameters()).device
-                _saved_dtype = next(self.model.parameters()).dtype
-                try:
-                    self.model = self.model.to("cpu", torch.float32)
-                    with torch.no_grad():
-                        predicted_ids = self.model.generate(input_features_readme)
-                finally:
-                    self.model = self.model.to(_saved_device, _saved_dtype)
+                # Keep the model resident on its configured device. Moving a Whisper
+                # model GPU -> CPU -> GPU for every request is substantially slower
+                # than moving the small input tensor to the model once.
+                input_features_readme = proc_readme.input_features.to(
+                    device=self._torch_device, dtype=model_dtype
+                )
+                with torch.inference_mode():
+                    predicted_ids = self.model.generate(input_features_readme)
                 raw = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].strip()
                 last_raw_from_model = raw
                 transcription = self._normalize_transcription(raw)

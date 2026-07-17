@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import requests, json
 from pathlib import Path
 import sys
@@ -34,6 +36,11 @@ def ask_gpt(messages):
     return ask_ai(messages, temperature=0.7)
 
 
+async def run_blocking(func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+
+
 # === Memory Handlers ===
 def load_memory():
     return load_json(SERVICE_NAME, "soa_conversations", [], MEMORY_FILE)
@@ -66,7 +73,7 @@ async def trigger(request: Request):
     print(f"SOA was triggered to do weekly SMART goal review for patient {patient_id}", flush=True)
 
     try:
-        response = requests.get(f"{MMA_URL}/{patient_id}")
+        response = await run_blocking(requests.get, f"{MMA_URL}/{patient_id}")
         if response.status_code == 200:
             notes = response.json()
             print(f"Retrieved {notes} from MMA for patient {patient_id}", flush=True)
@@ -101,7 +108,7 @@ async def trigger(request: Request):
 
     # AI调用，添加异常处理
     try:
-        assistant_reply = safe_coach_reply(ask_gpt(initial_prompt), initial_fallback)
+        assistant_reply = safe_coach_reply(await run_blocking(ask_gpt, initial_prompt), initial_fallback)
     except Exception as e:
         print(f"Error calling AI service: {e}", flush=True)
         assistant_reply = initial_fallback
@@ -115,7 +122,7 @@ async def trigger(request: Request):
     })
 
     try:
-        oa_response = requests.post(OA_URL, json={
+        oa_response = await run_blocking(requests.post, OA_URL, json={
             "patient_id": patient_id,
             "turn_index": 1,
             "message": assistant_reply
@@ -127,7 +134,7 @@ async def trigger(request: Request):
     except Exception as e:
         print(f"Error sending message to OA: {e}", flush=True)
 
-    return {"status": "SOA triggered", "patient_id": patient_id}
+    return {"status": "SOA triggered", "patient_id": patient_id, "assistant_message": assistant_reply}
 
 @app.post("/receive_message")
 async def receive_message(request: Request):
@@ -175,7 +182,7 @@ async def receive_message(request: Request):
 
     # 将用户消息同步到 OA 的 goal_reviews.json（role: user）
     try:
-        oa_user_resp = requests.post(OA_USER_URL, json={
+        oa_user_resp = await run_blocking(requests.post, OA_USER_URL, json={
             "patient_id": patient_id,
             "turn_index": turn_index,
             "user_input": user_input
@@ -252,13 +259,13 @@ async def receive_message(request: Request):
                 {"role": "user", "content": assistant_prompt}
             ]
         try:
-            assistant_reply = safe_coach_reply(ask_gpt(full_prompt), assistant_fallback)
+            assistant_reply = safe_coach_reply(await run_blocking(ask_gpt, full_prompt), assistant_fallback)
         except Exception as e:
             print(f"Error calling AI service in receive_message: {e}", flush=True)
             assistant_reply = assistant_fallback
         chat_history.append({"role": "assistant", "content": assistant_reply})
         try:
-            oa_response = requests.post(OA_URL, json={
+            oa_response = await run_blocking(requests.post, OA_URL, json={
                 "patient_id": patient_id,
                 "turn_index": turn_index,
                 "message": assistant_reply
@@ -273,7 +280,7 @@ async def receive_message(request: Request):
         agent_to_trigger = "GRA"
         try:
             # 触发GRA并等待完成，确保turn_index正确更新
-            gra_response = requests.post(GRA_URL, json={
+            gra_response = await run_blocking(requests.post, GRA_URL, json={
                 "patient_id": patient_id,
                 "turn_index": turn_index,
                 "agent_to_trigger": agent_to_trigger
@@ -281,8 +288,7 @@ async def receive_message(request: Request):
             if gra_response.status_code == 200:
                 print(f"Triggered {agent_to_trigger} for patient {patient_id}", flush=True)
                 # 等待一下，确保GRA的消息已经到达OA并更新turn_index
-                import time
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
             else:
                 print(f"Failed to trigger {agent_to_trigger} for patient {patient_id} (status {gra_response.status_code})", flush=True)
         except Exception as e:
@@ -293,4 +299,8 @@ async def receive_message(request: Request):
         "chat_history": chat_history
     })
 
-    return {"status": "message processed", "turn_index": turn_index}
+    return {
+        "status": "message processed",
+        "turn_index": turn_index,
+        "assistant_message": assistant_reply,
+    }
