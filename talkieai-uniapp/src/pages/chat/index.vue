@@ -170,12 +170,13 @@ import MessageContent from "./components/MessageContent.vue";
 import Prompt from "./components/Prompt.vue";
 import Speech from "./components/MessageSpeech.vue";
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, getCurrentInstance } from "vue";
-import { onLoad, onShow } from "@dcloudio/uni-app";
+import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
 import chatRequest from "@/api/chat";
 import masRequest from "@/api/mas";
 import accountRequest from "@/api/account";
 import topicRequest from "@/api/topic";
 import utils from "@/utils/utils";
+import { markHomeRefreshNeeded } from "@/utils/pageRefreshState";
 import audioPlayer from "@/components/audioPlayerExecuter";
 import type { Message, MessagePage, Session, AccountSettings } from "@/models/models";
 
@@ -219,6 +220,12 @@ const coachDashboard = ref<Record<string, any> | null>(null);
 const coachDashboardLoading = ref(false);
 const MAS_META_REFRESH_COOLDOWN_MS = 1500;
 let lastMasMetaRefreshAt = 0;
+
+onUnload(() => {
+  if (session.value.type === "MAS") {
+    markHomeRefreshNeeded();
+  }
+});
 
 // 历史查看模式：从侧栏进入的只读对话，不显示输入栏与 New Session
 const isHistoryView = ref(false);

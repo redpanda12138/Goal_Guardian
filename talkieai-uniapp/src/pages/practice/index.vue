@@ -250,6 +250,7 @@ const summariesPayload = ref<any>(null);
 const summaryLoading = ref(false);
 const goalsLoading = ref(false);
 const tabNum = ref<string>("1");
+const coachLoaded = ref(false);
 
 const goalsDetail = computed(() => {
   const value = dashboard.value?.goals_detail;
@@ -339,6 +340,9 @@ onMounted(() => {
 });
 
 onShow(() => {
+  if (coachLoaded.value) return;
+
+  coachLoaded.value = true;
   nextTick(() => {
     loadDashboard().finally(() => {
       setTimeout(() => {

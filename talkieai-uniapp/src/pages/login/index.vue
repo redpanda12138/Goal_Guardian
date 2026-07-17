@@ -54,6 +54,7 @@
 import { ref, reactive, onMounted } from 'vue';
 import accountRequest from '@/api/account';
 import Fingerprint2 from 'fingerprintjs2';
+import { resetPageRefreshState } from '@/utils/pageRefreshState';
 
 const X_TOKEN = 'x-token';
 const loginLoading = ref(false);
@@ -195,6 +196,7 @@ const loginSuccess = (data: any) => {
  * 通过用户token加载后续逻辑
  */
 const loginSuccessByToken = (storageToken: string) => {
+  resetPageRefreshState();
   uni.setStorageSync('x-token', storageToken);
   uni.switchTab({
     url: '/pages/index/index'
