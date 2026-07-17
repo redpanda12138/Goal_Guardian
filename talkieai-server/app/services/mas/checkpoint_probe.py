@@ -4,13 +4,23 @@ This module is deliberately not imported by production MAS routes.  It verifies
 the external checkpointer lifecycle before any production workflow migration.
 """
 from typing import Any, Awaitable, Callable, Dict, Optional
-from urllib.parse import SplitResult, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 SUPPORTED_POSTGRES_SCHEMES = {
+    "postgres",
     "postgresql",
     "postgresql+psycopg",
     "postgresql+psycopg2",
+}
+SENSITIVE_QUERY_KEYS = {
+    "password",
+    "pass",
+    "passwd",
+    "token",
+    "access_token",
+    "api_key",
+    "sslpassword",
 }
 
 
@@ -41,14 +51,24 @@ def normalize_checkpoint_postgres_uri(connection_uri: str) -> str:
 
 
 def redact_checkpoint_postgres_uri(connection_uri: str) -> str:
-    """Return a display-safe URI which replaces a password with ``***``."""
+    """Return a display-safe URI which replaces userinfo and query secrets."""
     parsed = _parse_supported_postgres_uri(connection_uri)
-    if "@" not in parsed.netloc:
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
-    credentials, host = parsed.netloc.rsplit("@", 1)
-    username = credentials.split(":", 1)[0]
-    redacted_netloc = username + ":***@" + host if ":" in credentials else credentials + "@" + host
-    return urlunsplit((parsed.scheme, redacted_netloc, parsed.path, parsed.query, ""))
+    redacted_netloc = parsed.netloc
+    if "@" in parsed.netloc:
+        credentials, host = parsed.netloc.rsplit("@", 1)
+        username = credentials.split(":", 1)[0]
+        redacted_netloc = (
+            username + ":***@" + host
+            if ":" in credentials
+            else credentials + "@" + host
+        )
+    redacted_query = urlencode(
+        [
+            (key, "***" if key.lower() in SENSITIVE_QUERY_KEYS else value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        ]
+    )
+    return urlunsplit((parsed.scheme, redacted_netloc, parsed.path, redacted_query, ""))
 
 
 def _get_async_postgres_saver_factory() -> Any:

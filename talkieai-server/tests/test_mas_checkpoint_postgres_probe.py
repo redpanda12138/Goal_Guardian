@@ -31,6 +31,10 @@ def load_probe_module(monkeypatch):
             "postgresql://user:secret@example.test/goalguardian",
             "postgresql://user:secret@example.test/goalguardian",
         ),
+        (
+            "postgres://user:secret@example.test/goalguardian?sslmode=require",
+            "postgresql://user:secret@example.test/goalguardian?sslmode=require",
+        ),
     ],
 )
 def test_normalize_checkpoint_uri_converts_supported_sqlalchemy_postgres_schemes(
@@ -59,6 +63,36 @@ def test_redact_checkpoint_uri_never_exposes_the_password(monkeypatch):
     assert probe.redact_checkpoint_postgres_uri(
         "postgresql://user:secret@example.test/goalguardian"
     ) == "postgresql://user:***@example.test/goalguardian"
+
+
+def test_redact_checkpoint_uri_removes_sensitive_query_values_and_keeps_safe_ones(
+    monkeypatch,
+):
+    probe = load_probe_module(monkeypatch)
+    source = (
+        "postgres://user:secret@example.test/goalguardian?"
+        "password=query-secret&pass=pass-secret&passwd=passwd-secret&"
+        "token=token-secret&access_token=access-secret&api_key=key-secret&"
+        "sslpassword=ssl-secret&sslmode=require&application_name=goalguardian"
+    )
+
+    redacted = probe.redact_checkpoint_postgres_uri(source)
+
+    for secret in (
+        "secret",
+        "query-secret",
+        "pass-secret",
+        "passwd-secret",
+        "token-secret",
+        "access-secret",
+        "key-secret",
+        "ssl-secret",
+    ):
+        assert secret not in redacted
+    assert redacted.startswith("postgres://user:***@example.test/goalguardian?")
+    assert "sslmode=require" in redacted
+    assert "application_name=goalguardian" in redacted
+    assert redacted.count("%2A%2A%2A") == 7
 
 
 def test_async_probe_initializes_closes_and_recovers_same_thread_checkpoint(monkeypatch):
