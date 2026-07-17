@@ -574,43 +574,27 @@ class ChatService:
             "turn_index": current_turn_index
         }
         
-        # 根据turn_index判断应该发送到哪个代理
-        result_data = None
-        if current_turn_index <= 5:
-            # SOA阶段（turn_index 1-5）
-            result_data = loop.run_until_complete(
-                MASGatewayService.call_mas_service(
-                    "soa",
-                    "/receive_message",
-                    data=message_data
-                )
+        # Keep the established turn boundaries and SOA compatibility retry intact.
+        from app.services.mas.legacy_routing import (
+            select_legacy_mas_agent,
+            should_retry_soa_with_gra,
+        )
+
+        selected_agent = select_legacy_mas_agent(current_turn_index)
+        result_data = loop.run_until_complete(
+            MASGatewayService.call_mas_service(
+                selected_agent,
+                "/receive_message",
+                data=message_data,
             )
-            # 如果SOA返回错误（可能是因为turn_index >= 6），重试发送到GRA
-            if result_data and result_data.get("status") == "error" and "should be sent to GRA" in result_data.get("reason", ""):
-                print(f"SOA rejected turn_index {current_turn_index}, redirecting to GRA", flush=True)
-                result_data = loop.run_until_complete(
-                    MASGatewayService.call_mas_service(
-                        "gra",
-                        "/receive_message",
-                        data=message_data
-                    )
-                )
-        elif current_turn_index <= 13:
-            # GRA阶段（turn_index 6-13）
+        )
+        if selected_agent == "soa" and should_retry_soa_with_gra(result_data):
+            print(f"SOA rejected turn_index {current_turn_index}, redirecting to GRA", flush=True)
             result_data = loop.run_until_complete(
                 MASGatewayService.call_mas_service(
                     "gra",
                     "/receive_message",
-                    data=message_data
-                )
-            )
-        else:
-            # SCA阶段
-            result_data = loop.run_until_complete(
-                MASGatewayService.call_mas_service(
-                    "sca",
-                    "/receive_message",
-                    data=message_data
+                    data=message_data,
                 )
             )
         
