@@ -31,10 +31,9 @@ class LatencyRegressionTest(unittest.TestCase):
         soa_source = (SERVER_ROOT / "mas" / "SOA" / "app.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn(
-            '"status": "SOA triggered", "patient_id": patient_id, "assistant_message": assistant_reply',
-            soa_source,
-        )
+        self.assertIn('"status": "SOA triggered"', soa_source)
+        self.assertIn('"patient_id": patient_id', soa_source)
+        self.assertIn('"persisted": True', soa_source)
 
     def test_chat_service_uses_direct_agent_reply_fast_path(self):
         source = (SERVER_ROOT / "app" / "services" / "chat_service.py").read_text(
@@ -42,6 +41,41 @@ class LatencyRegressionTest(unittest.TestCase):
         )
 
         self.assertIn('result_data.get("assistant_message")', source)
+        self.assertIn('result_data.get("persisted") is True', source)
+
+    def test_chat_service_stops_on_agent_oa_persistence_failure(self):
+        source = (SERVER_ROOT / "app" / "services" / "chat_service.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('result_data.get("reason") == "OA persistence failed"', source)
+        self.assertIn('raise Exception("MAS OA persistence failed")', source)
+
+    def test_mas_agents_report_oa_persistence_failures_before_fast_path(self):
+        for agent in ("SOA", "GRA", "SCA"):
+            source = (SERVER_ROOT / "mas" / agent / "app.py").read_text(
+                encoding="utf-8"
+            )
+
+            self.assertIn("return_oa_persistence_error", source)
+            self.assertIn('"persisted": False', source)
+            self.assertIn('"reason": "OA persistence failed"', source)
+
+    def test_mas_receive_message_uses_patient_session_lock(self):
+        for agent in ("SOA", "GRA", "SCA"):
+            source = (SERVER_ROOT / "mas" / agent / "app.py").read_text(
+                encoding="utf-8"
+            )
+
+            self.assertIn("def patient_session_lock(patient_id):", source)
+            self.assertIn("async with patient_session_lock(patient_id):", source)
+
+    def test_whisper_keeps_transcribe_fallback_as_default(self):
+        source = (SERVER_ROOT / "app" / "core" / "whisper_voice.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('os.environ.get("WHISPER_FALLBACK_MODE", "transcribe")', source)
 
     def test_main_service_does_not_duplicate_normal_oa_user_write(self):
         source = (SERVER_ROOT / "app" / "services" / "chat_service.py").read_text(

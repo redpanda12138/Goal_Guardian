@@ -615,6 +615,9 @@ class ChatService:
             )
         
         # 检查MAS服务返回的状态，如果返回"done"，会话已结束
+        if result_data and result_data.get("reason") == "OA persistence failed":
+            raise Exception("MAS OA persistence failed")
+
         if result_data and result_data.get("status") == "done":
             # 会话已结束，返回结束消息
             end_message = "This session has been completed. Thank you for participating in today's health coaching session. We'll see you next time!"
@@ -650,7 +653,7 @@ class ChatService:
         # message and continue through the compatibility path below.
         direct_assistant_message = (
             str(result_data.get("assistant_message") or "").strip()
-            if result_data
+            if result_data and result_data.get("persisted") is True
             else ""
         )
         if direct_assistant_message:

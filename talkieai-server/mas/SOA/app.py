@@ -1,5 +1,6 @@
 import asyncio
 import functools
+from contextlib import asynccontextmanager
 import requests, json
 from pathlib import Path
 import sys
@@ -21,6 +22,7 @@ MMA_URL = "http://mma:8000/patient_notes"
 OA_URL = "http://oa:8000/receive_message"
 OA_USER_URL = "http://oa:8000/receive_user_message"
 GRA_URL = "http://oa:8000/trigger_agent"
+REQUEST_TIMEOUT_SECONDS = 15
 
 MEMORY_FILE = Path("/app/memory/soa_conversations.json")
 SERVICE_NAME = "soa"
@@ -28,6 +30,8 @@ SERVICE_NAME = "soa"
 
 # === Initialization ===
 app = FastAPI()
+_patient_locks = {}
+_patient_locks_guard = asyncio.Lock()
 
 
 # === AI Wrapper (支持OpenAI和智谱AI) ===
@@ -39,6 +43,45 @@ def ask_gpt(messages):
 async def run_blocking(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+
+
+@asynccontextmanager
+async def patient_session_lock(patient_id):
+    async with _patient_locks_guard:
+        lock = _patient_locks.setdefault(patient_id, asyncio.Lock())
+    async with lock:
+        yield
+
+
+async def post_json(url, payload):
+    return await run_blocking(
+        requests.post,
+        url,
+        json=payload,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+
+
+async def persist_oa_message(url, payload, label, patient_id, turn_index):
+    try:
+        response = await post_json(url, payload)
+        if response.status_code == 200:
+            print(f"Sent {label} to OA for patient {patient_id} (turn {turn_index})", flush=True)
+            return True
+        print(f"Failed to send {label} to OA (status {response.status_code})", flush=True)
+    except Exception as e:
+        print(f"Error sending {label} to OA: {e}", flush=True)
+    return False
+
+
+def return_oa_persistence_error(patient_id, turn_index):
+    return {
+        "status": "error",
+        "reason": "OA persistence failed",
+        "patient_id": patient_id,
+        "turn_index": turn_index,
+        "persisted": False,
+    }
 
 
 # === Memory Handlers ===
@@ -115,36 +158,47 @@ async def trigger(request: Request):
 
     chat_history = [{"role": "assistant", "content": assistant_reply}]
 
+    persisted = await persist_oa_message(
+        OA_URL,
+        {
+            "patient_id": patient_id,
+            "turn_index": 1,
+            "message": assistant_reply
+        },
+        "assistant message",
+        patient_id,
+        1,
+    )
+    if not persisted:
+        return return_oa_persistence_error(patient_id, 1)
+
     save_message({
         "patient_id": patient_id,
         "notes": notes,
         "chat_history": chat_history
     })
 
-    try:
-        oa_response = await run_blocking(requests.post, OA_URL, json={
-            "patient_id": patient_id,
-            "turn_index": 1,
-            "message": assistant_reply
-        })
-        if oa_response.status_code == 200:
-            print(f"Sent HC message to OA for patient {patient_id} (turn 1)", flush=True)
-        else:
-            print(f"Failed to send message to OA (status {oa_response.status_code})", flush=True)
-    except Exception as e:
-        print(f"Error sending message to OA: {e}", flush=True)
-
-    return {"status": "SOA triggered", "patient_id": patient_id, "assistant_message": assistant_reply}
+    return {
+        "status": "SOA triggered",
+        "patient_id": patient_id,
+        "assistant_message": assistant_reply,
+        "persisted": True,
+    }
 
 @app.post("/receive_message")
 async def receive_message(request: Request):
     data = await request.json()
     patient_id = data.get("patient_id")
-    user_input = data.get("user_input")
-    turn_index = int(data.get("turn_index"))
-
     if not patient_id:
         return {"status": "error", "reason": "Missing patient_id"}
+    async with patient_session_lock(patient_id):
+        return await _receive_message_locked(data)
+
+
+async def _receive_message_locked(data):
+    patient_id = data.get("patient_id")
+    user_input = data.get("user_input")
+    turn_index = int(data.get("turn_index"))
 
     # 检查会话是否已结束
     if turn_index >= 15:
@@ -158,7 +212,7 @@ async def receive_message(request: Request):
     if not patient_entry:
         return {"status": "error", "reason": "Patient session not found"}
 
-    chat_history = patient_entry.get("chat_history", [])
+    chat_history = list(patient_entry.get("chat_history", []))
     
     # 如果turn_index >= 6，SOA不应该再处理，应该由GRA处理
     if turn_index >= 6:
@@ -181,18 +235,19 @@ async def receive_message(request: Request):
     chat_history.append({"role": "user", "content": user_input})
 
     # 将用户消息同步到 OA 的 goal_reviews.json（role: user）
-    try:
-        oa_user_resp = await run_blocking(requests.post, OA_USER_URL, json={
+    user_persisted = await persist_oa_message(
+        OA_USER_URL,
+        {
             "patient_id": patient_id,
             "turn_index": turn_index,
             "user_input": user_input
-        })
-        if oa_user_resp.status_code == 200:
-            print(f"Sent user message to OA for patient {patient_id} (turn {turn_index})", flush=True)
-        else:
-            print(f"Failed to send user message to OA (status {oa_user_resp.status_code})", flush=True)
-    except Exception as e:
-        print(f"Error sending user message to OA: {e}", flush=True)
+        },
+        "user message",
+        patient_id,
+        turn_index,
+    )
+    if not user_persisted:
+        return return_oa_persistence_error(patient_id, turn_index)
 
     notes = patient_entry.get("notes", {})
 
@@ -264,18 +319,19 @@ async def receive_message(request: Request):
             print(f"Error calling AI service in receive_message: {e}", flush=True)
             assistant_reply = assistant_fallback
         chat_history.append({"role": "assistant", "content": assistant_reply})
-        try:
-            oa_response = await run_blocking(requests.post, OA_URL, json={
+        assistant_persisted = await persist_oa_message(
+            OA_URL,
+            {
                 "patient_id": patient_id,
                 "turn_index": turn_index,
                 "message": assistant_reply
-            })
-            if oa_response.status_code == 200:
-                print(f"Sent HC message to OA for patient {patient_id} (turn {turn_index})", flush=True)
-            else:
-                print(f"Failed to send message to OA (status {oa_response.status_code})", flush=True)
-        except Exception as e:
-            print(f"Error sending message to OA: {e}", flush=True)
+            },
+            "assistant message",
+            patient_id,
+            turn_index,
+        )
+        if not assistant_persisted:
+            return return_oa_persistence_error(patient_id, turn_index)
     elif turn_index == 6:
         agent_to_trigger = "GRA"
         try:
@@ -303,4 +359,5 @@ async def receive_message(request: Request):
         "status": "message processed",
         "turn_index": turn_index,
         "assistant_message": assistant_reply,
+        "persisted": True,
     }

@@ -180,9 +180,9 @@ class WhisperVoiceProcessor:
 
             transcription = ""
             last_raw_from_model = ""
-            # Extra decode attempts are opt-in because each fallback can nearly double
-            # recognition latency on CPU-only deployments.
-            fallback_mode = os.environ.get("WHISPER_FALLBACK_MODE", "none").strip().lower()
+            # Keep the historical transcribe fallback by default. Operators can
+            # still set WHISPER_FALLBACK_MODE=none to minimize latency explicitly.
+            fallback_mode = os.environ.get("WHISPER_FALLBACK_MODE", "transcribe").strip().lower()
 
             # Processor+Model：先做与 test_sing2eng_download.py 完全一致的 README 式调用（CPU float32、不截断、不传 task），再 fallback
             if self.processor and self.model:
