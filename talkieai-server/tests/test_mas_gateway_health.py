@@ -73,9 +73,7 @@ def test_health_check_accepts_openapi_when_service_has_no_health_endpoint(monkey
     )
     FakeAsyncClient.calls = []
 
-    result = asyncio.get_event_loop().run_until_complete(
-        module.MASGatewayService.check_service_health("mma")
-    )
+    result = asyncio.run(module.MASGatewayService.check_service_health("mma"))
 
     assert result is True
     assert FakeAsyncClient.calls == [

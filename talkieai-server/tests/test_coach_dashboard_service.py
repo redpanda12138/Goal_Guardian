@@ -35,6 +35,7 @@ class FakeDBSession:
     def __init__(self):
         self.rows = []
         self.commits = 0
+        self.close_calls = 0
 
     def query(self, model):
         return FakeQuery(self.rows)
@@ -44,6 +45,9 @@ class FakeDBSession:
 
     def commit(self):
         self.commits += 1
+
+    def close(self):
+        self.close_calls += 1
 
 
 class StubPatientMappingService:
@@ -71,7 +75,7 @@ class FixedDateTime(real_datetime):
         return cls(2026, 4, 23, 9, 30, 0)
 
 
-def load_coach_dashboard_module():
+def load_coach_dashboard_module(monkeypatch):
     module_name = "coach_dashboard_service_under_test"
     module_path = (
         Path(__file__).resolve().parents[1]
@@ -90,22 +94,25 @@ def load_coach_dashboard_module():
     mas_pkg = types.ModuleType("app.services.mas")
     mas_pkg.__path__ = []
 
-    sys.modules["app"] = app_pkg
-    sys.modules["app.db"] = db_pkg
-    sys.modules["app.services"] = services_pkg
-    sys.modules["app.services.mas"] = mas_pkg
-
     sys_entities_module = types.ModuleType("app.db.sys_entities")
     sys_entities_module.SysCacheEntity = FakeSysCacheEntity
-    sys.modules["app.db.sys_entities"] = sys_entities_module
 
     gateway_module = types.ModuleType("app.services.mas.mas_gateway_service")
     gateway_module.MASGatewayService = StubMASGatewayService
-    sys.modules["app.services.mas.mas_gateway_service"] = gateway_module
 
     patient_module = types.ModuleType("app.services.mas.patient_mapping_service")
     patient_module.PatientMappingService = StubPatientMappingService
-    sys.modules["app.services.mas.patient_mapping_service"] = patient_module
+
+    for module_name, stub_module in {
+        "app": app_pkg,
+        "app.db": db_pkg,
+        "app.services": services_pkg,
+        "app.services.mas": mas_pkg,
+        "app.db.sys_entities": sys_entities_module,
+        "app.services.mas.mas_gateway_service": gateway_module,
+        "app.services.mas.patient_mapping_service": patient_module,
+    }.items():
+        monkeypatch.setitem(sys.modules, module_name, stub_module)
 
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     module = importlib.util.module_from_spec(spec)
@@ -116,7 +123,7 @@ def load_coach_dashboard_module():
 
 
 @pytest.fixture
-def coach_module():
+def coach_module(monkeypatch):
     StubMASGatewayService.responses = {
         ("mma", "/patient_goals/patient-acct-1", "GET"): {
             "preferred_name": "Alex",
@@ -133,7 +140,7 @@ def coach_module():
             "latest_summary": "Kept up the routine this week.",
         },
     }
-    return load_coach_dashboard_module()
+    return load_coach_dashboard_module(monkeypatch)
 
 
 @pytest.fixture

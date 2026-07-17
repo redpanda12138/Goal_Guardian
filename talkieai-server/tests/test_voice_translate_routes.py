@@ -17,6 +17,14 @@ os.environ.setdefault("TOKEN_EXPIRE_TIME", "3600")
 
 
 class VoiceTranslateRoutesTest(unittest.TestCase):
+    @patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "sqlite:///:memory:",
+            "SQL_ECHO": "false",
+            "TOKEN_EXPIRE_TIME": "3600",
+        },
+    )
     def test_standalone_voice_translate_lazily_uses_whisper_processor(self):
         from app.api import session_routes
 

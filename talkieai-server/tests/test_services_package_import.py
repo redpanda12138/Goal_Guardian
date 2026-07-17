@@ -13,6 +13,7 @@ class ServicesPackageImportTest(unittest.TestCase):
         env = os.environ.copy()
         env["DATABASE_URL"] = "sqlite:///:memory:"
         env["SQL_ECHO"] = "false"
+        env["TOKEN_EXPIRE_TIME"] = "3600"
         try:
             return subprocess.run(
                 [sys.executable, "-c", command],
