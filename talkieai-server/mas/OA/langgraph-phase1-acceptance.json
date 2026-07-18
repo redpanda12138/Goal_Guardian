@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "phase": "oa_langgraph_phase1",
+  "status": "passed",
+  "base_commit": "e020d79",
+  "checks": {
+    "compatibility_gate": true,
+    "security_allowlist_gate": true,
+    "phase1_focused_tests": true,
+    "legacy_regression_tests": true,
+    "scope_confinement": true
+  }
+}
