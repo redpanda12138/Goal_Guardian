@@ -13,12 +13,16 @@ def test_every_boundary_terminates(turn, expected):
     assert decision.selected_agent == expected
 
 def test_invalid_and_transition_paths_terminate_without_side_effects():
-    invalid = invoke_phase1_graph({**BASE, "turn_index": True})
-    assert (invalid.route_status, invalid.selected_agent) == ("error", None)
+    with pytest.raises(ValueError, match="turn_index"):
+        invoke_phase1_graph({**BASE, "turn_index": True})
     approved = invoke_phase1_graph({**BASE, "event_type": "agent_transition_intent", "turn_index": 6, "requested_agent": "GRA"})
     assert (approved.route_status, approved.selected_agent) == ("ready", "GRA")
     conflict = invoke_phase1_graph({**BASE, "event_type": "agent_transition_intent", "turn_index": 6, "requested_agent": "SCA"})
     assert (conflict.route_status, conflict.selected_agent) == ("error", None)
+
+def test_wrapper_rejects_unknown_fields_before_langgraph_can_filter_them():
+    with pytest.raises(ValueError, match="unknown graph field"):
+        invoke_phase1_graph({**BASE, "unexpected": "must-not-be-filtered"})
 
 def test_workflow_source_is_pure():
     package = Path(__file__).resolve().parents[2] / "mas" / "OA" / "workflow_phase1"

@@ -57,6 +57,7 @@ def build_phase1_graph():
     return builder.compile(checkpointer=None)
 
 def invoke_phase1_graph(raw: Mapping[str, Any]) -> RouteDecision:
+    validated = validate_graph_input(raw)
     graph = build_phase1_graph()
     assert graph.checkpointer is None
-    return decision_from_state(graph.invoke(dict(raw)))
+    return decision_from_state(graph.invoke(validated))

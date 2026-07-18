@@ -54,6 +54,8 @@ def validate_graph_input(raw: Mapping[str, Any]) -> GraphState:
     if raw["session_status"] not in {"active", "completed"}:
         raise ValueError("unsupported session_status")
     requested = raw.get("requested_agent")
+    if requested is not None and type(requested) is not str:
+        raise ValueError("requested_agent must be a string")
     if requested is not None and requested not in {"SOA", "GRA", "SCA", "SSA"}:
         raise ValueError("unsupported requested_agent")
     if raw["event_type"] == "agent_transition_intent" and requested is None:

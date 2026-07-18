@@ -23,3 +23,8 @@ def test_missing_and_transition_requirements_are_strict():
         validate_graph_input(incomplete)
     with pytest.raises(ValueError, match="requested_agent is required"):
         validate_graph_input({**VALID, "event_type": "agent_transition_intent"})
+
+@pytest.mark.parametrize("requested_agent", [["GRA"], {"agent": "GRA"}])
+def test_requested_agent_must_be_a_string(requested_agent):
+    with pytest.raises(ValueError, match="requested_agent"):
+        validate_graph_input({**VALID, "event_type": "agent_transition_intent", "requested_agent": requested_agent})
