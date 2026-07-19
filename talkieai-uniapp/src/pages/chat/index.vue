@@ -190,10 +190,12 @@ import type {
 } from "@/models/models";
 import {
   blocksConversation,
+  cancellationPayload,
   confirmationPayload,
   createToolConfirmationState,
-  markConfirmationCancelled,
+  markConfirmationCancelling,
   markConfirmationSubmitting,
+  resolveCancellation,
   resolveToolExecution,
 } from "@/pages/chat/toolConfirmationState.mjs";
 
@@ -438,8 +440,22 @@ const onToolConfirm = (message: Message) => {
 const onToolCancel = (message: Message) => {
   const pending = message.tool_confirmation;
   if (!pending || pending.status !== "pending") return;
-  message.tool_confirmation = markConfirmationCancelled(pending);
-  uni.showToast({ title: "No change was made", icon: "none" });
+  const cancelling = markConfirmationCancelling(pending);
+  message.tool_confirmation = cancelling;
+  masRequest
+    .executeWorkflowTool(cancellationPayload(cancelling))
+    .then((response: any) => {
+      const current = message.tool_confirmation;
+      if (!current || current.status !== "cancelling") return;
+      message.tool_confirmation = resolveCancellation(current, response?.data);
+      uni.showToast({ title: "No change was made", icon: "none" });
+    })
+    .catch((error: unknown) => {
+      const current = message.tool_confirmation;
+      if (!current || current.status !== "cancelling") return;
+      message.tool_confirmation = resolveCancellation(current, null, error);
+      console.error("Tool cancellation result is indeterminate", error);
+    });
 };
 
 const onToolRefresh = () => {
@@ -688,12 +704,8 @@ const sendMessage = (message?: string, fileName?: string) => {
         id: data.id,
         content: data.data,
         tool_confirmation:
-          data.tool_confirmation &&
-          Number.isInteger(data.tool_confirmation_turn_index)
-            ? createToolConfirmationState(
-                data.tool_confirmation,
-                data.tool_confirmation_turn_index,
-              )
+          data.tool_confirmation
+            ? createToolConfirmationState(data.tool_confirmation)
             : null,
         auto_hint: accountSetting.value.auto_text_shadow == 1,
         auto_play: accountSetting.value.auto_playing_voice == 1,
@@ -801,6 +813,9 @@ const initData = (sessionId: string) => {
         file_name: item.file_name,
         style: (item as any).style,
         message_kind: (item as any).message_kind,
+        tool_confirmation: (item as any).tool_confirmation
+          ? createToolConfirmationState((item as any).tool_confirmation)
+          : null,
         auto_hint: false,
         auto_play: false,
         auto_pronunciation: false,

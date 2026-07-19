@@ -5,22 +5,22 @@
     :aria-label="copy.title"
     aria-live="polite"
   >
-    <template v-if="state.status === 'pending' || state.status === 'submitting'">
+    <template v-if="['pending', 'submitting', 'cancelling'].includes(state.status)">
       <text class="tool-confirmation__eyebrow">Confirmation required</text>
       <text class="tool-confirmation__title">{{ copy.title }}</text>
       <text class="tool-confirmation__detail">{{ copy.detail }}</text>
       <view class="tool-confirmation__actions">
         <button
           class="tool-confirmation__button tool-confirmation__button--secondary"
-          :disabled="state.status === 'submitting'"
+          :disabled="state.status !== 'pending'"
           aria-label="Cancel this proposed action"
           @tap="$emit('cancel')"
         >
-          Cancel
+          {{ state.status === "cancelling" ? "Cancelling…" : "Cancel" }}
         </button>
         <button
           class="tool-confirmation__button tool-confirmation__button--primary"
-          :disabled="state.status === 'submitting'"
+          :disabled="state.status !== 'pending'"
           :aria-busy="state.status === 'submitting'"
           :aria-label="copy.confirmLabel"
           @tap="$emit('confirm')"

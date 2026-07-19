@@ -2,23 +2,31 @@ declare module "@/pages/chat/toolConfirmationState.mjs" {
   import type {
     ToolConfirmationState,
     ToolExecutionResult,
+    PersistedToolConfirmation,
     ToolRequest,
   } from "@/models/models";
 
   export function createToolConfirmationState(
-    request: ToolRequest,
-    turnIndex: number,
+    persisted: PersistedToolConfirmation,
   ): ToolConfirmationState;
   export function confirmationPayload(state: ToolConfirmationState): {
-    tool_request: ToolRequest;
+    action_id: string;
     confirmed: true;
-    turn_index: number;
   };
   export function markConfirmationSubmitting(
     state: ToolConfirmationState,
   ): ToolConfirmationState;
-  export function markConfirmationCancelled(
+  export function markConfirmationCancelling(
     state: ToolConfirmationState,
+  ): ToolConfirmationState;
+  export function cancellationPayload(state: ToolConfirmationState): {
+    action_id: string;
+    confirmed: false;
+  };
+  export function resolveCancellation(
+    state: ToolConfirmationState,
+    result: { action_id: string; action_status: "cancelled" } | null,
+    transportError?: unknown,
   ): ToolConfirmationState;
   export function resolveToolExecution(
     state: ToolConfirmationState,

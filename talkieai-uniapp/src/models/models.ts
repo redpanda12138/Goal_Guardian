@@ -55,12 +55,14 @@ export interface ToolRequest {
 export type ToolConfirmationStatus =
   | "pending"
   | "submitting"
+  | "cancelling"
   | "completed"
   | "cancelled"
   | "failed"
   | "indeterminate";
 
 export interface ToolConfirmationState {
+  actionId: string;
   request: ToolRequest;
   turnIndex: number;
   status: ToolConfirmationStatus;
@@ -74,6 +76,15 @@ export interface ToolExecutionResult {
   payload?: Record<string, unknown>;
   error_code?: string | null;
   assistant_message?: string;
+  action_id: string;
+  action_status: "completed" | "failed";
+}
+
+export interface PersistedToolConfirmation {
+  action_id: string;
+  tool_request: ToolRequest;
+  turn_index: number;
+  status: "pending" | "executing" | "completed" | "cancelled" | "failed";
 }
 
 export interface Phoneme {

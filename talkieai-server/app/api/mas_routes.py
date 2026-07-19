@@ -1,7 +1,7 @@
 """
 MAS系统API路由：作为网关转发请求到MAS服务
 """
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.core import get_current_account
@@ -14,7 +14,7 @@ from app.models.mas_models import (
     CreateScheduleDTO,
     DeleteMasSessionsDTO,
     CoachStateEventDTO,
-    ExecuteWorkflowToolDTO,
+    ResolveWorkflowToolConfirmationDTO,
 )
 from app.services.mas.patient_mapping_service import PatientMappingService
 from app.services.mas.mas_gateway_service import MASGatewayService
@@ -32,37 +32,59 @@ def _get_patient_id_and_release_db(db: Session, account_id: str) -> str:
 
 @router.post("/mas/workflow/tools/execute", name="Execute MAS Workflow Tool")
 async def execute_workflow_tool(
-    dto: ExecuteWorkflowToolDTO,
+    dto: ResolveWorkflowToolConfirmationDTO,
     db: Session = Depends(get_db),
     account_id: str = Depends(get_current_account),
 ):
     """Execute one account-scoped allowlisted tool through the confirmation gate."""
     from app.services.mas.tool_handlers import execute_account_tool
     from app.services.mas.tool_workflow import build_gra_continuation
-    from app.models.mas_workflow_models import ToolResultStatus
-
-    patient_id = None
-    if dto.turn_index is not None:
-        patient_id = PatientMappingService(db).get_or_create_patient_id(account_id)
-
-    result = await execute_account_tool(
-        db,
-        account_id,
-        dto.tool_request,
-        confirmed=dto.confirmed,
+    from app.services.mas.pending_tool_confirmation import (
+        PendingActionConflict,
+        PendingActionNotFound,
+        PendingToolConfirmationStore,
     )
+
+    store = PendingToolConfirmationStore(db)
+    try:
+        if not dto.confirmed:
+            cancelled = store.cancel(dto.action_id, account_id)
+            db.commit()
+            return ApiResponse(
+                data={
+                    "action_id": dto.action_id,
+                    "action_status": cancelled["status"],
+                }
+            )
+
+        action = store.get(dto.action_id, account_id)
+        request = store.claim(dto.action_id, account_id)
+        db.commit()
+    except PendingActionNotFound as error:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(error))
+    except PendingActionConflict as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error))
+
+    result = await execute_account_tool(db, account_id, request, confirmed=True)
+    try:
+        finished = store.finish(dto.action_id, account_id, result.status.value)
+        db.commit()
+    except (PendingActionNotFound, PendingActionConflict) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error))
+
     data = result.dict()
-    if (
-        patient_id is not None
-        and dto.turn_index is not None
-        and result.status != ToolResultStatus.SKIPPED
-    ):
-        continuation = build_gra_continuation(
-            MASGatewayService,
-            patient_id,
-            dto.turn_index,
-        )
-        data["assistant_message"] = await continuation(result)
+    data["action_id"] = dto.action_id
+    data["action_status"] = finished["status"]
+    patient_id = PatientMappingService(db).get_or_create_patient_id(account_id)
+    continuation = build_gra_continuation(
+        MASGatewayService,
+        patient_id,
+        action["turn_index"],
+    )
+    data["assistant_message"] = await continuation(result)
     return ApiResponse(data=data)
 
 # ========== MAS会话管理 ==========

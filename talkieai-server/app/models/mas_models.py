@@ -53,3 +53,16 @@ class ExecuteWorkflowToolDTO(BaseModel):
         if value is not None and (type(value) is not int or not 0 <= value <= 15):
             raise ValueError("turn_index must be between 0 and 15")
         return value
+
+
+class ResolveWorkflowToolConfirmationDTO(BaseModel):
+    """Resolve one server-owned workflow-tool confirmation action."""
+
+    action_id: str
+    confirmed: bool
+
+    @validator("action_id")
+    def validate_action_id(cls, value):
+        if not isinstance(value, str) or not value.strip() or len(value) > 80:
+            raise ValueError("action_id must be a non-empty stable identifier")
+        return value.strip()

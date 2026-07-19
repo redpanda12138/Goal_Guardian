@@ -107,8 +107,18 @@ class ChatService:
         """
         from app.services.mas.patient_mapping_service import PatientMappingService
         from app.services.mas.mas_gateway_service import MASGatewayService
+        from app.services.mas.pending_tool_confirmation import PendingToolConfirmationStore
         from app.core.logging import logging
         import asyncio
+
+        if PendingToolConfirmationStore(self.db).has_blocking_for_session(
+            session_id, account_id
+        ):
+            logging.info(
+                f"MAS sync: skip mirror while a tool confirmation is unresolved "
+                f"session={session_id}"
+            )
+            return
 
         try:
             loop = asyncio.get_event_loop()
@@ -722,6 +732,20 @@ class ChatService:
             )
             self.db.add(add_account_message)
             self.db.add(add_system_message)
+            pending_confirmation = None
+            if result_data.get("tool_confirmation") is not None:
+                from app.models.mas_workflow_models import ToolRequest
+                from app.services.mas.pending_tool_confirmation import (
+                    PendingToolConfirmationStore,
+                )
+
+                pending_confirmation = PendingToolConfirmationStore(self.db).create(
+                    account_id=account_id,
+                    session_id=session_id,
+                    message_id=add_system_message.id,
+                    turn_index=result_data["tool_confirmation_turn_index"],
+                    request=ToolRequest.parse_obj(result_data["tool_confirmation"]),
+                )
             self.db.commit()
             self.db.flush()
             self.__refresh_session_message_count(session_id)
@@ -734,11 +758,8 @@ class ChatService:
                 "create_time": date_to_str(add_system_message.create_time),
                 "completed": False,
             }
-            if result_data.get("tool_confirmation") is not None:
-                response_payload["tool_confirmation"] = result_data["tool_confirmation"]
-                response_payload["tool_confirmation_turn_index"] = result_data.get(
-                    "tool_confirmation_turn_index"
-                )
+            if pending_confirmation is not None:
+                response_payload["tool_confirmation"] = pending_confirmation
             if result_data.get("tool_result") is not None:
                 response_payload["tool_result"] = result_data["tool_result"]
             if result_data.get("retrieval_results"):
@@ -1539,7 +1560,7 @@ class ChatService:
     def initMessageResult(self, message: MessageEntity):
         st = message.style or ""
         message_kind = "state_event" if st.startswith("STATE_EVENT:") else "conversation"
-        return {
+        result = {
             "role": "ASSISTANT" if message.type == MessageType.SYSTEM.value else "USER",
             "content": message.content,
             "file_name": message.file_name,
@@ -1549,6 +1570,17 @@ class ChatService:
             "style": st,
             "message_kind": message_kind,
         }
+        if message.type == MessageType.SYSTEM.value:
+            from app.services.mas.pending_tool_confirmation import (
+                PendingToolConfirmationStore,
+            )
+
+            confirmation = PendingToolConfirmationStore(self.db).get_for_message(
+                message.id, message.account_id
+            )
+            if confirmation is not None:
+                result["tool_confirmation"] = confirmation
+        return result
 
     def __convert_session_model(self, session: MessageSessionEntity):
         return {
