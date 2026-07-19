@@ -14,6 +14,7 @@ from app.models.mas_models import (
     CreateScheduleDTO,
     DeleteMasSessionsDTO,
     CoachStateEventDTO,
+    ExecuteWorkflowToolDTO,
 )
 from app.services.mas.patient_mapping_service import PatientMappingService
 from app.services.mas.mas_gateway_service import MASGatewayService
@@ -27,6 +28,24 @@ def _get_patient_id_and_release_db(db: Session, account_id: str) -> str:
     patient_id = mapping_service.get_or_create_patient_id(account_id)
     db.close()
     return patient_id
+
+
+@router.post("/mas/workflow/tools/execute", name="Execute MAS Workflow Tool")
+async def execute_workflow_tool(
+    dto: ExecuteWorkflowToolDTO,
+    db: Session = Depends(get_db),
+    account_id: str = Depends(get_current_account),
+):
+    """Execute one account-scoped allowlisted tool through the confirmation gate."""
+    from app.services.mas.tool_handlers import execute_account_tool
+
+    result = await execute_account_tool(
+        db,
+        account_id,
+        dto.tool_request,
+        confirmed=dto.confirmed,
+    )
+    return ApiResponse(data=result.dict())
 
 # ========== MAS会话管理 ==========
 

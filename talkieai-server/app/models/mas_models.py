@@ -4,6 +4,8 @@ MAS系统相关的数据模型
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
+from app.models.mas_workflow_models import ToolRequest
+
 
 class SubmitNotesDTO(BaseModel):
     """提交健康教练会话笔记"""
@@ -37,3 +39,10 @@ class CoachStateEventDTO(BaseModel):
     goal_index: Optional[int] = None
     note: Optional[str] = None
     message: Optional[str] = None
+
+
+class ExecuteWorkflowToolDTO(BaseModel):
+    """Authenticated execution request for one allowlisted workflow tool."""
+
+    tool_request: ToolRequest
+    confirmed: bool = False
