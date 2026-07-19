@@ -110,6 +110,63 @@ def test_main_backend_adapter_returns_versioned_retrieval_contracts(retrieval):
     assert results[0].metadata["context_role"] == "untrusted_data"
 
 
+def test_main_backend_trace_boundary_revalidates_service_results(retrieval):
+    _common, service = retrieval
+    raw = {
+        "contract_version": "v1",
+        "retrieval_id": "retrieval-12345678",
+        "source_id": "source-sleep-001",
+        "content": "bounded context",
+        "score": 0.5,
+        "metadata": {"context_role": "untrusted_data"},
+    }
+
+    assert service.validate_retrieval_trace([raw]) == [raw]
+
+
+@pytest.mark.parametrize(
+    "results",
+    [
+        "not-a-list",
+        [
+            {
+                "contract_version": "v1",
+                "retrieval_id": "retrieval-12345678",
+                "source_id": "source-sleep-001",
+                "content": "context",
+                "score": 1.5,
+                "metadata": {"context_role": "untrusted_data"},
+            }
+        ],
+        [
+            {
+                "contract_version": "v1",
+                "retrieval_id": "retrieval-12345678",
+                "source_id": "source-sleep-001",
+                "content": "x" * 1201,
+                "score": 0.5,
+                "metadata": {"context_role": "untrusted_data"},
+            }
+        ],
+        [
+            {
+                "contract_version": "v1",
+                "retrieval_id": "retrieval-12345678",
+                "source_id": "source-sleep-001",
+                "content": "context",
+                "score": 0.5,
+                "metadata": {},
+            }
+        ],
+    ],
+)
+def test_main_backend_trace_boundary_rejects_forged_results(retrieval, results):
+    _common, service = retrieval
+
+    with pytest.raises(ValueError):
+        service.validate_retrieval_trace(results)
+
+
 @pytest.mark.parametrize("query", ["", "   ", "x" * 1001])
 def test_query_boundary_rejects_empty_or_oversized_input(retrieval, query):
     common, _service = retrieval

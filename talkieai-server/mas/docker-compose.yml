@@ -58,6 +58,8 @@ services:
       - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
       - MAS_MEMORY_REQUIRE_DATABASE=true
+      - MAS_RAG_ENABLED=${MAS_RAG_ENABLED:-false}
+      - MAS_RAG_CORPUS_PATH=${MAS_RAG_CORPUS_PATH:-/app/common/rag_corpus.json}
     volumes:
       - ./common:/app/common:ro
       - ./GRA/memory:/app/memory

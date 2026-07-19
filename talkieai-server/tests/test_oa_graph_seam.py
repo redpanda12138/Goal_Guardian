@@ -64,6 +64,29 @@ def test_tool_request_is_a_valid_graph_ingress_result():
     assert result["status"] == "tool_requested"
 
 
+def test_invalid_retrieval_trace_from_graph_service_fails_closed():
+    gateway = Gateway([
+        {"status": "ok", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 7},
+        {
+            "status": "ok",
+            "assistant_message": "unsupported claim",
+            "retrieval_results": [
+                {
+                    "contract_version": "v1",
+                    "retrieval_id": "retrieval-12345678",
+                    "source_id": "source-test-0001",
+                    "content": "context",
+                    "score": 2,
+                    "metadata": {"context_role": "untrusted_data"},
+                }
+            ],
+        },
+    ])
+    with patch("app.services.mas.oa_graph_seam.Config.MAS_OA_GRAPH_SEAM_ENABLED", True):
+        with pytest.raises(OAGraphRoutingError, match="invalid retrieval trace"):
+            run(route_if_latched_graph(gateway, "p", "progress", 7, "stable"))
+
+
 def test_latched_graph_continues_when_new_session_rollout_is_off():
     gateway = Gateway([
         {"status": "ok", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 2},

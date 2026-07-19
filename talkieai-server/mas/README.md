@@ -83,3 +83,40 @@ Recommended rollout order:
 5. Reset one test patient's session and verify that `/workflow_mode/{patient_id}` reports `graph_v1`.
 
 To stop allocating new graph sessions, set only `OA_LANGGRAPH_NEW_SESSIONS_ENABLED=false`. Existing `graph_v1` session generations remain latched until reset. Keep the main-backend seam enabled while any graph session is active.
+
+## Optional approved-source RAG
+
+RAG is disabled by default and is used only by `graph_v1` GRA turns. Before
+enabling it, place a reviewed UTF-8 JSON corpus at a path mounted read-only into
+the GRA container. The existing Compose configuration mounts `mas/common` at
+`/app/common`.
+
+```dotenv
+MAS_RAG_ENABLED=false
+MAS_RAG_CORPUS_PATH=/app/common/rag_corpus.json
+```
+
+The corpus root must contain a non-empty `documents` list. Every document must
+be explicitly approved and have a unique stable identifier:
+
+```json
+{
+  "documents": [
+    {
+      "source_id": "source-reviewed-001",
+      "content": "Text copied from an approved source.",
+      "approved": true,
+      "metadata": {
+        "title": "Reviewed source title",
+        "source": "curated-local"
+      }
+    }
+  ]
+}
+```
+
+Do not enable this switch with placeholder or unreviewed health content. Invalid
+or missing enabled corpora fail the RAG-enhanced turn into the existing GRA
+fallback. Retrieved text is treated as untrusted reference data, is bounded to
+1,200 characters per result, and is returned with source identifiers for
+traceability.

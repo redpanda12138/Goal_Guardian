@@ -644,6 +644,10 @@ class ChatService:
                         result_data["tool_confirmation_turn_index"] = graph_tool_turn
                 finally:
                     tool_db.close()
+                if graph_result.get("retrieval_results"):
+                    result_data["retrieval_results"] = graph_result[
+                        "retrieval_results"
+                    ]
             else:
                 result_data = graph_result
         else:
@@ -737,6 +741,10 @@ class ChatService:
                 )
             if result_data.get("tool_result") is not None:
                 response_payload["tool_result"] = result_data["tool_result"]
+            if result_data.get("retrieval_results"):
+                response_payload["retrieval_results"] = result_data[
+                    "retrieval_results"
+                ]
             return response_payload
         
         # 再次检查会话状态，确保会话没有在MAS处理过程中结束

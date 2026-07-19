@@ -1,6 +1,7 @@
 from uuid import NAMESPACE_URL, uuid5
 
 from app.config import Config
+from app.services.mas.rag_retrieval import validate_retrieval_trace
 
 
 class OAGraphRoutingError(RuntimeError):
@@ -33,4 +34,11 @@ async def route_if_latched_graph(gateway, patient_id, user_input, turn_index, re
     })
     if not isinstance(result, dict) or result.get("status") not in {"ok", "completed", "tool_requested"}:
         raise OAGraphRoutingError("OA graph ingress failed closed")
+    if result.get("retrieval_results") is not None:
+        try:
+            result["retrieval_results"] = validate_retrieval_trace(
+                result["retrieval_results"]
+            )
+        except ValueError as error:
+            raise OAGraphRoutingError("OA returned an invalid retrieval trace") from error
     return result
