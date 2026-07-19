@@ -1,4 +1,5 @@
 import request from "@/axios/api";
+import type { ToolRequest } from "@/models/models";
 export default {
   // 患者信息管理
   submitNotes: (data: any) => {
@@ -23,6 +24,13 @@ export default {
     message?: string;
   }) => {
     return request("/mas/coach/goals/state-event", "POST", data, false);
+  },
+  executeWorkflowTool: (data: {
+    tool_request: ToolRequest;
+    confirmed: true;
+    turn_index: number;
+  }) => {
+    return request("/mas/workflow/tools/execute", "POST", data, false);
   },
 
   // 会话管理

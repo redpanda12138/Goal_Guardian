@@ -34,13 +34,16 @@
         <view class="message-content-item">
           <message-content :auto-hint="messages.auto_text_shadow" :auto-play="accountSetting.auto_playing_voice"
             :auto-pronunciation="accountSetting.auto_pronunciation" :message="message"
+            @confirm-tool="onToolConfirm(message)"
+            @cancel-tool="onToolCancel(message)"
+            @refresh-tool="onToolRefresh"
             ref="messageListRef"></message-content>
         </view>
       </template>
     </view>
 
     <!-- 底部操作栏：历史查看模式下不显示 -->
-    <view class="chat-bottom-container" v-if="!isMasSessionCompleted && !isHistoryView">
+    <view class="chat-bottom-container" v-if="!isMasSessionCompleted && !isHistoryView && !hasBlockingToolConfirmation">
       <!-- 键盘输入 -->
       <view v-if="!inputTypeVoice" class="input-bottom-container" :style="'bottom:' + inputBottom + 'px;'">
         <view @tap="handleSwitchInputType" class="voice-icon-box">
@@ -178,7 +181,21 @@ import topicRequest from "@/api/topic";
 import utils from "@/utils/utils";
 import { markHomeRefreshNeeded } from "@/utils/pageRefreshState";
 import audioPlayer from "@/components/audioPlayerExecuter";
-import type { Message, MessagePage, Session, AccountSettings } from "@/models/models";
+import type {
+  AccountSettings,
+  Message,
+  MessagePage,
+  Session,
+  ToolExecutionResult,
+} from "@/models/models";
+import {
+  blocksConversation,
+  confirmationPayload,
+  createToolConfirmationState,
+  markConfirmationCancelled,
+  markConfirmationSubmitting,
+  resolveToolExecution,
+} from "@/pages/chat/toolConfirmationState.mjs";
 
 const session = ref<Session>({
   id: undefined,
@@ -253,6 +270,10 @@ const inputFocus = (e: any) => {
 const inputHasText = computed(() => {
   return !!(inputText.value && inputText.value.trim());
 });
+
+const hasBlockingToolConfirmation = computed(() =>
+  messages.value.some((message) => blocksConversation(message.tool_confirmation)),
+);
 
 const sendMessageHandler = (info: any) => {
   if (info.text) {
@@ -363,6 +384,68 @@ const onCoachModify = () => {
 
 const onCoachNextTap = () => {
   uni.switchTab({ url: "/pages/practice/index" });
+};
+
+const appendToolContinuation = (content: string) => {
+  if (!content) return;
+  messages.value.push({
+    id: `tool_${Date.now()}`,
+    session_id: session.value.id,
+    content,
+    owner: false,
+    role: "ASSISTANT",
+    file_name: null,
+    message_kind: "tool_result",
+    actions_enabled: false,
+    auto_hint: false,
+    auto_play: false,
+    auto_pronunciation: false,
+  });
+  nextTick(() => scrollToBottom());
+};
+
+const onToolConfirm = (message: Message) => {
+  const pending = message.tool_confirmation;
+  if (!pending || pending.status !== "pending") return;
+
+  const payload = confirmationPayload(pending);
+  message.tool_confirmation = markConfirmationSubmitting(pending);
+  masRequest
+    .executeWorkflowTool(payload)
+    .then((response: any) => {
+      const current = message.tool_confirmation;
+      if (!current || current.status !== "submitting") return;
+      const resolved = resolveToolExecution(
+        current,
+        response?.data as ToolExecutionResult,
+      );
+      message.tool_confirmation = resolved.state;
+      appendToolContinuation(resolved.assistantMessage);
+      refreshMasSessionMeta(true);
+    })
+    .catch((error: unknown) => {
+      const current = message.tool_confirmation;
+      if (!current || current.status !== "submitting") return;
+      message.tool_confirmation = resolveToolExecution(
+        current,
+        null,
+        error,
+      ).state;
+      console.error("Tool confirmation result is indeterminate", error);
+    });
+};
+
+const onToolCancel = (message: Message) => {
+  const pending = message.tool_confirmation;
+  if (!pending || pending.status !== "pending") return;
+  message.tool_confirmation = markConfirmationCancelled(pending);
+  uni.showToast({ title: "No change was made", icon: "none" });
+};
+
+const onToolRefresh = () => {
+  if (session.value.id) {
+    initData(session.value.id);
+  }
 };
 
 /** 根据内容计算输入框高度（1～6 行），删除文字时能缩回一行 */
@@ -604,6 +687,14 @@ const sendMessage = (message?: string, fileName?: string) => {
         ...aiMessage,
         id: data.id,
         content: data.data,
+        tool_confirmation:
+          data.tool_confirmation &&
+          Number.isInteger(data.tool_confirmation_turn_index)
+            ? createToolConfirmationState(
+                data.tool_confirmation,
+                data.tool_confirmation_turn_index,
+              )
+            : null,
         auto_hint: accountSetting.value.auto_text_shadow == 1,
         auto_play: accountSetting.value.auto_playing_voice == 1,
       });

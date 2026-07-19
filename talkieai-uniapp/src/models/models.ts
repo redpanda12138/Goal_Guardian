@@ -39,6 +39,41 @@ export interface Message {
   /** 后端 MessageEntity.style；STATE_EVENT:* 为健康顾问状态条 */
   style?: string | null;
   message_kind?: string | null;
+  tool_confirmation?: ToolConfirmationState | null;
+  actions_enabled?: boolean;
+}
+
+export type WorkflowToolName = "mark_goal_complete" | "reschedule_review";
+
+export interface ToolRequest {
+  contract_version: "v1";
+  tool_name: WorkflowToolName;
+  arguments: Record<string, unknown>;
+  requires_confirmation: true;
+}
+
+export type ToolConfirmationStatus =
+  | "pending"
+  | "submitting"
+  | "completed"
+  | "cancelled"
+  | "failed"
+  | "indeterminate";
+
+export interface ToolConfirmationState {
+  request: ToolRequest;
+  turnIndex: number;
+  status: ToolConfirmationStatus;
+  error: string;
+}
+
+export interface ToolExecutionResult {
+  contract_version: "v1";
+  tool_name: WorkflowToolName;
+  status: "succeeded" | "failed" | "skipped";
+  payload?: Record<string, unknown>;
+  error_code?: string | null;
+  assistant_message?: string;
 }
 
 export interface Phoneme {
