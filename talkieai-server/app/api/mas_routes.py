@@ -489,6 +489,17 @@ async def send_message(
             "user_input": dto.user_input,
             "turn_index": dto.turn_index
         }
+
+        from app.services.mas.oa_graph_seam import route_if_latched_graph, stable_graph_request_id
+        graph_result = await route_if_latched_graph(
+            MASGatewayService,
+            patient_id,
+            dto.user_input,
+            dto.turn_index,
+            stable_graph_request_id(account_id, f"mas-route:{patient_id}", f"{dto.turn_index}:{dto.user_input}"),
+        )
+        if graph_result is not None:
+            return ApiResponse(data=graph_result)
         
         # 根据turn_index判断代理
         # SOA: turn_index 1-6

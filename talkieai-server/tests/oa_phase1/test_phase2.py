@@ -42,20 +42,21 @@ def test_duplicate_conflict_and_stale_generation_are_rejected_or_idempotent():
 def test_graph_ingress_dispatches_once_without_holding_reservation_lock():
     records = [{"patient_id": "p", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 2}]
     lock_was_free = []
-    def fake_trigger(patient_id, turn_index, agent):
+    def fake_trigger(patient_id, turn_index, agent, user_input):
         acquired = workflow_phase2._reservation_lock.acquire(blocking=False)
         lock_was_free.append(acquired)
         if acquired:
             workflow_phase2._reservation_lock.release()
         return {"status": "ok"}
-    with patch.object(oa_app, "load_goal_reviews", return_value=records), patch.object(oa_app, "save_goal_reviews"), patch.object(oa_app, "trigger_agent_sync", side_effect=fake_trigger):
+    with patch.object(oa_app, "load_goal_reviews", return_value=records), patch.object(oa_app, "save_goal_reviews"), patch.object(oa_app, "dispatch_graph_user_message_sync", side_effect=fake_trigger):
         client = TestClient(oa_app.app)
-        payload = {"patient_id": "p", "session_generation": 2, "request_id": "r", "turn_index": 6}
+        payload = {"patient_id": "p", "session_generation": 2, "request_id": "r", "turn_index": 6, "user_input": "hello"}
         first = client.post("/graph_v1/user_turn", json=payload).json()
         second = client.post("/graph_v1/user_turn", json=payload).json()
     assert first["selected_agent"] == "GRA"
     assert second["message"] == "duplicate_ignored"
     assert lock_was_free == [True]
+    assert records[0]["chat_history"] == [{"role": "user", "content": "hello"}]
 
 
 def test_legacy_trigger_endpoint_remains_exact_when_flag_is_off(monkeypatch):

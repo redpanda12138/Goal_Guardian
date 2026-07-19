@@ -193,6 +193,16 @@ def trigger_agent_sync(patient_id: str, turn_index: int, agent_to_trigger: str) 
         print(f"Failed to trigger {agent_to_trigger}: {e}", flush=True)
         return {"status": "error", "reason": str(e)}
 
+
+def dispatch_graph_user_message_sync(patient_id: str, turn_index: int, agent_to_trigger: str, user_input: str) -> dict:
+    url = AGENT_URL.format(agent=agent_to_trigger.lower()).replace("/trigger", "/receive_message")
+    response = requests.post(url, json={"patient_id": patient_id, "turn_index": turn_index, "user_input": user_input}, timeout=(3, 120))
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict) or body.get("status") in {"error", "failed"}:
+        raise RuntimeError("selected Agent returned an invalid response")
+    return body
+
 def reset_patient_session_state(patient_id: str) -> None:
     """
     清空 OA 中该患者在 goal_reviews 里的会话状态。
@@ -556,7 +566,8 @@ async def graph_v1_user_turn(request: Request):
     generation = data.get("session_generation")
     request_id = data.get("request_id")
     turn_index = data.get("turn_index")
-    if not patient_id or type(generation) is not int or not request_id or type(turn_index) is not int:
+    user_input = data.get("user_input")
+    if not patient_id or type(generation) is not int or not request_id or type(turn_index) is not int or type(user_input) is not str or not user_input:
         return {"status": "error", "reason": "Missing graph ingress identity"}
     records = load_goal_reviews()
     try:
@@ -569,10 +580,12 @@ async def graph_v1_user_turn(request: Request):
         return {"status": "error", "reason": decision.route_reason}
     if reservation_status != "reserved":
         return {"status": "ok", "message": "duplicate_ignored", "reservation_status": reservation_status}
+    record = next(item for item in records if item.get("patient_id") == patient_id)
+    record.setdefault("chat_history", []).append({"role": "user", "content": user_input})
     save_goal_reviews(records)
     mark_dispatched(records, patient_id, request_id)
     save_goal_reviews(records)
-    result = trigger_agent_sync(patient_id, turn_index, decision.selected_agent)
+    result = dispatch_graph_user_message_sync(patient_id, turn_index, decision.selected_agent, user_input)
     return {**result, "selected_agent": decision.selected_agent, "request_id": request_id}
 
 @app.get("/next_review_time/{patient_id}")

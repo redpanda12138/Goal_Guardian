@@ -574,29 +574,48 @@ class ChatService:
             "turn_index": current_turn_index
         }
         
+        # The seam is inert by default. Once enabled, OA's latched session mode is
+        # authoritative; an OA failure must not fall back and double-route.
+        from app.services.mas.oa_graph_seam import (
+            route_if_latched_graph,
+            stable_graph_request_id,
+        )
+        graph_result = loop.run_until_complete(
+            route_if_latched_graph(
+                MASGatewayService,
+                patient_id,
+                send_message_content,
+                current_turn_index,
+                stable_graph_request_id(account_id, session_id, str(send_message_id)),
+            )
+        )
+
         # Keep the established turn boundaries and SOA compatibility retry intact.
         from app.services.mas.legacy_routing import (
             select_legacy_mas_agent,
             should_retry_soa_with_gra,
         )
 
-        selected_agent = select_legacy_mas_agent(current_turn_index)
-        result_data = loop.run_until_complete(
-            MASGatewayService.call_mas_service(
-                selected_agent,
-                "/receive_message",
-                data=message_data,
-            )
-        )
-        if selected_agent == "soa" and should_retry_soa_with_gra(result_data):
-            print(f"SOA rejected turn_index {current_turn_index}, redirecting to GRA", flush=True)
+        if graph_result is not None:
+            result_data = graph_result
+        else:
+            selected_agent = select_legacy_mas_agent(current_turn_index)
             result_data = loop.run_until_complete(
                 MASGatewayService.call_mas_service(
-                    "gra",
+                    selected_agent,
                     "/receive_message",
                     data=message_data,
                 )
             )
+            if selected_agent == "soa" and should_retry_soa_with_gra(result_data):
+                print(f"SOA rejected turn_index {current_turn_index}, redirecting to GRA", flush=True)
+                result_data = loop.run_until_complete(
+                    MASGatewayService.call_mas_service(
+                        "gra",
+                        "/receive_message",
+                        data=message_data,
+                    )
+                )
         
         # 检查MAS服务返回的状态，如果返回"done"，会话已结束
         if result_data and result_data.get("reason") == "OA persistence failed":
