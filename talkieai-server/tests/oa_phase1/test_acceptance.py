@@ -24,6 +24,6 @@ def test_six_service_topology_is_unchanged():
     assert set(compose["services"]) == {"mma", "soa", "gra", "sca", "ssa", "oa"}
 
 def test_langgraph_is_confined_to_oa():
-    allowed = {OA / "requirements-langgraph-phase1-candidate.txt", OA / "requirements-langgraph-phase1-probe.txt", OA / "requirements-langgraph-phase1.lock", ROOT / "requirements-mas-checkpoint-probe.txt"}
+    allowed = {OA / "requirements.txt", OA / "requirements-langgraph-phase1-candidate.txt", OA / "requirements-langgraph-phase1-probe.txt", OA / "requirements-langgraph-phase1.lock", ROOT / "requirements-mas-checkpoint-probe.txt"}
     offenders = [path for path in ROOT.rglob("requirements*.txt") if "langgraph" in path.read_text(encoding="utf-8").lower() and path not in allowed]
     assert offenders == []

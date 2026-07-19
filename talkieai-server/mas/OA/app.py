@@ -15,6 +15,7 @@ for common_dir in (
 
 from mas_memory_store import load_json, save_json, memory_exists
 from runtime_config import orchestration_enabled
+from workflow_phase2 import mark_dispatched, reserve_graph_dispatch, reset_and_latch, session_identity
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/extract"
@@ -201,12 +202,11 @@ def reset_patient_session_state(patient_id: str) -> None:
     records = load_goal_reviews()
     patient_entry = next((r for r in records if r.get("patient_id") == patient_id), None)
     if not patient_entry:
-        records.append(
-            {"patient_id": patient_id, "turn_index": 0, "chat_history": []}
-        )
+        patient_entry = {"patient_id": patient_id}
+        records.append(patient_entry)
+        reset_and_latch(patient_entry)
     else:
-        patient_entry["turn_index"] = 0
-        patient_entry["chat_history"] = []
+        reset_and_latch(patient_entry)
     save_goal_reviews(records)
     print(
         f"🗓️ Reset OA session state for {patient_id} before scheduled SOA trigger",
@@ -321,8 +321,7 @@ def orchestration_loop():
                         
                         for patient_entry in records:
                             if patient_entry.get("turn_index", 0) > 0 or len(patient_entry.get("chat_history", [])) > 0:
-                                patient_entry["turn_index"] = 0
-                                patient_entry["chat_history"] = []
+                                reset_and_latch(patient_entry)
                                 reset_count += 1
                         
                         if reset_count > 0:
@@ -513,12 +512,68 @@ async def trigger_agent(request: Request):
 
     if not patient_id:
         return {"status": "error", "reason": "Missing patient_id"}
+    records = load_goal_reviews()
+    record = next((item for item in records if item.get("patient_id") == patient_id), {})
+    if session_identity(record)["workflow_mode"] == "graph_v1":
+        generation = data.get("session_generation")
+        request_id = data.get("request_id")
+        if type(generation) is not int or not request_id:
+            return {"status": "error", "reason": "Missing graph session_generation or request_id"}
+        try:
+            decision, reservation_status = reserve_graph_dispatch(
+                records, patient_id, generation, request_id, turn_index,
+                event_type="agent_transition_intent", requested_agent=agent_to_trigger,
+            )
+        except ValueError as error:
+            return {"status": "error", "reason": str(error)}
+        if reservation_status == "conflict":
+            return {"status": "error", "reason": decision.route_reason}
+        if reservation_status != "reserved":
+            return {"status": "ok", "message": "duplicate_ignored", "reservation_status": reservation_status}
+        save_goal_reviews(records)
+        mark_dispatched(records, patient_id, request_id)
+        save_goal_reviews(records)
+        result = trigger_agent_sync(patient_id, turn_index, decision.selected_agent)
+        return {**result, "selected_agent": decision.selected_agent, "request_id": request_id}
     if not turn_index:
         return {"status": "error", "reason": "Missing turn_index"}
     if not agent_to_trigger:
         return {"status": "error", "reason": "Missing agent_to_trigger"}
 
     return trigger_agent_sync(patient_id, turn_index, agent_to_trigger)
+
+
+@app.get("/workflow_mode/{patient_id}")
+async def workflow_mode(patient_id: str):
+    record = next((item for item in load_goal_reviews() if item.get("patient_id") == patient_id), {})
+    return {"status": "ok", "patient_id": patient_id, **session_identity(record)}
+
+
+@app.post("/graph_v1/user_turn")
+async def graph_v1_user_turn(request: Request):
+    data = await request.json()
+    patient_id = data.get("patient_id")
+    generation = data.get("session_generation")
+    request_id = data.get("request_id")
+    turn_index = data.get("turn_index")
+    if not patient_id or type(generation) is not int or not request_id or type(turn_index) is not int:
+        return {"status": "error", "reason": "Missing graph ingress identity"}
+    records = load_goal_reviews()
+    try:
+        decision, reservation_status = reserve_graph_dispatch(records, patient_id, generation, request_id, turn_index)
+    except ValueError as error:
+        return {"status": "error", "reason": str(error)}
+    if reservation_status == "completed":
+        return {"status": "completed", "selected_agent": None}
+    if reservation_status == "conflict":
+        return {"status": "error", "reason": decision.route_reason}
+    if reservation_status != "reserved":
+        return {"status": "ok", "message": "duplicate_ignored", "reservation_status": reservation_status}
+    save_goal_reviews(records)
+    mark_dispatched(records, patient_id, request_id)
+    save_goal_reviews(records)
+    result = trigger_agent_sync(patient_id, turn_index, decision.selected_agent)
+    return {**result, "selected_agent": decision.selected_agent, "request_id": request_id}
 
 @app.get("/next_review_time/{patient_id}")
 async def next_review_time(patient_id: str):
@@ -715,8 +770,7 @@ async def reset_all_sessions():
     
     for patient_entry in records:
         if patient_entry.get("turn_index", 0) > 0 or len(patient_entry.get("chat_history", [])) > 0:
-            patient_entry["turn_index"] = 0
-            patient_entry["chat_history"] = []
+            reset_and_latch(patient_entry)
             reset_count += 1
     
     # 保存更新后的记录
