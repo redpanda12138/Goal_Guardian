@@ -2,6 +2,7 @@ from threading import Lock
 from uuid import uuid4
 
 from runtime_config import langgraph_new_sessions_enabled
+from workflow_phase1.contracts import RouteDecision
 from workflow_phase1.graph import invoke_phase1_graph
 
 LEGACY_MODE = "legacy"
@@ -32,8 +33,12 @@ def reset_and_latch(record):
     return record
 
 
-def reserve_graph_dispatch(records, patient_id, generation, request_id, turn_index, event_type="user_turn", requested_agent=None):
+def reserve_graph_dispatch(load_records, save_records, patient_id, generation, request_id, turn_index, event_type="user_turn", requested_agent=None, user_input=None):
     with _reservation_lock:
+        # Reload and persist under one process-local critical section. Callers must
+        # not supply snapshots: two requests that started with stale data still
+        # serialize against the latest durable OA document.
+        records = load_records()
         record = next((item for item in records if item.get("patient_id") == patient_id), None)
         if record is None:
             raise ValueError("session_not_found")
@@ -45,7 +50,7 @@ def reserve_graph_dispatch(records, patient_id, generation, request_id, turn_ind
         reservations = record.setdefault("graph_transition_reservations", {})
         prior = reservations.get(request_id)
         if prior:
-            return None, prior["status"]
+            return RouteDecision(prior["agent"], "existing_reservation", "ready"), prior["status"]
         decision = invoke_phase1_graph({
             "patient_id": patient_id,
             "session_generation": generation,
@@ -59,16 +64,24 @@ def reserve_graph_dispatch(records, patient_id, generation, request_id, turn_ind
         if decision.route_status == "error":
             return decision, "conflict"
         if decision.selected_agent is None:
-            return decision, "completed"
+            return decision, "session_completed"
         reservations[request_id] = {"status": "reserved", "agent": decision.selected_agent}
+        if user_input is not None:
+            record.setdefault("chat_history", []).append({"role": "user", "content": user_input})
+        save_records(records)
         return decision, "reserved"
 
 
-def mark_dispatched(records, patient_id, request_id):
+def transition_dispatch(load_records, save_records, patient_id, request_id, expected, target):
     with _reservation_lock:
+        records = load_records()
         record = next(item for item in records if item.get("patient_id") == patient_id)
         reservation = record["graph_transition_reservations"][request_id]
-        reservation["status"] = "dispatched"
+        if reservation["status"] != expected:
+            return False, reservation["status"]
+        reservation["status"] = target
+        save_records(records)
+        return True, target
 
 
 def new_request_id():
