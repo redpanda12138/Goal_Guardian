@@ -204,7 +204,12 @@ def trigger_agent_sync(patient_id: str, turn_index: int, agent_to_trigger: str) 
 
 def dispatch_graph_user_message_sync(patient_id: str, turn_index: int, agent_to_trigger: str, user_input: str) -> dict:
     url = AGENT_URL.format(agent=agent_to_trigger.lower()).replace("/trigger", "/receive_message")
-    response = requests.post(url, json={"patient_id": patient_id, "turn_index": turn_index, "user_input": user_input}, timeout=(3, 120))
+    response = requests.post(url, json={
+        "patient_id": patient_id,
+        "turn_index": turn_index,
+        "user_input": user_input,
+        "workflow_mode": "graph_v1",
+    }, timeout=(3, 120))
     response.raise_for_status()
     body = response.json()
     if not isinstance(body, dict) or body.get("status") in {"error", "failed"}:

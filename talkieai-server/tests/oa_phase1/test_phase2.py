@@ -176,6 +176,28 @@ def test_legacy_trigger_endpoint_remains_exact_when_flag_is_off(monkeypatch):
     trigger.assert_called_once_with("p", 1, "SOA")
 
 
+def test_graph_dispatch_marks_the_agent_request_as_graph_mode():
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "message processed", "persisted": True}
+
+    with patch.object(oa_app.requests, "post", return_value=Response()) as post:
+        result = oa_app.dispatch_graph_user_message_sync(
+            "patient-1", 7, "GRA", "How am I doing?"
+        )
+
+    assert result["status"] == "message processed"
+    assert post.call_args.kwargs["json"] == {
+        "patient_id": "patient-1",
+        "turn_index": 7,
+        "user_input": "How am I doing?",
+        "workflow_mode": "graph_v1",
+    }
+
+
 def test_production_requirements_use_modern_runtime_without_probe_tools():
     text = (oa_app.Path(__file__).resolve().parents[2] / "mas" / "OA" / "requirements.txt").read_text(encoding="utf-8")
     assert "langgraph==1.2.9" in text

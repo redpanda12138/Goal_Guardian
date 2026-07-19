@@ -38,6 +38,12 @@ async def execute_workflow_tool(
 ):
     """Execute one account-scoped allowlisted tool through the confirmation gate."""
     from app.services.mas.tool_handlers import execute_account_tool
+    from app.services.mas.tool_workflow import build_gra_continuation
+    from app.models.mas_workflow_models import ToolResultStatus
+
+    patient_id = None
+    if dto.turn_index is not None:
+        patient_id = PatientMappingService(db).get_or_create_patient_id(account_id)
 
     result = await execute_account_tool(
         db,
@@ -45,7 +51,19 @@ async def execute_workflow_tool(
         dto.tool_request,
         confirmed=dto.confirmed,
     )
-    return ApiResponse(data=result.dict())
+    data = result.dict()
+    if (
+        patient_id is not None
+        and dto.turn_index is not None
+        and result.status != ToolResultStatus.SKIPPED
+    ):
+        continuation = build_gra_continuation(
+            MASGatewayService,
+            patient_id,
+            dto.turn_index,
+        )
+        data["assistant_message"] = await continuation(result)
+    return ApiResponse(data=data)
 
 # ========== MAS会话管理 ==========
 

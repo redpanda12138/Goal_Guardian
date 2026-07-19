@@ -597,7 +597,55 @@ class ChatService:
         )
 
         if graph_result is not None:
-            result_data = graph_result
+            if graph_result.get("status") == "tool_requested":
+                from app.db import SessionLocal
+                from app.services.mas.tool_executor import MASToolExecutor
+                from app.services.mas.tool_handlers import build_account_tool_handlers
+                from app.services.mas.tool_workflow import (
+                    build_gra_continuation,
+                    handle_graph_model_message,
+                )
+
+                tool_db = SessionLocal()
+                try:
+                    graph_tool_turn = graph_result.get(
+                        "turn_index", current_turn_index + 1
+                    )
+                    executor = MASToolExecutor(
+                        build_account_tool_handlers(tool_db, account_id)
+                    )
+
+                    async def persist_confirmation(message):
+                        response = await MASGatewayService.call_mas_service(
+                            "oa",
+                            "/receive_message",
+                            data={
+                                "patient_id": patient_id,
+                                "turn_index": graph_tool_turn,
+                                "message": message,
+                            },
+                        )
+                        if not isinstance(response, dict) or response.get("status") != "ok":
+                            raise RuntimeError("OA rejected tool confirmation persistence")
+
+                    result_data = loop.run_until_complete(
+                        handle_graph_model_message(
+                            executor,
+                            graph_result.get("model_message"),
+                            continue_agent=build_gra_continuation(
+                                MASGatewayService,
+                                patient_id,
+                                graph_tool_turn,
+                            ),
+                            persist_confirmation=persist_confirmation,
+                        )
+                    )
+                    if result_data.get("tool_confirmation") is not None:
+                        result_data["tool_confirmation_turn_index"] = graph_tool_turn
+                finally:
+                    tool_db.close()
+            else:
+                result_data = graph_result
         else:
             selected_agent = select_legacy_mas_agent(current_turn_index)
             result_data = loop.run_until_complete(
@@ -673,7 +721,7 @@ class ChatService:
             self.db.commit()
             self.db.flush()
             self.__refresh_session_message_count(session_id)
-            return {
+            response_payload = {
                 "data": direct_assistant_message,
                 "id": add_system_message.id,
                 "session_id": session_id,
@@ -682,6 +730,14 @@ class ChatService:
                 "create_time": date_to_str(add_system_message.create_time),
                 "completed": False,
             }
+            if result_data.get("tool_confirmation") is not None:
+                response_payload["tool_confirmation"] = result_data["tool_confirmation"]
+                response_payload["tool_confirmation_turn_index"] = result_data.get(
+                    "tool_confirmation_turn_index"
+                )
+            if result_data.get("tool_result") is not None:
+                response_payload["tool_result"] = result_data["tool_result"]
+            return response_payload
         
         # 再次检查会话状态，确保会话没有在MAS处理过程中结束
         try:

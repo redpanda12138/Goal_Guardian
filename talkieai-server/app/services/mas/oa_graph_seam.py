@@ -31,6 +31,6 @@ async def route_if_latched_graph(gateway, patient_id, user_input, turn_index, re
         "request_id": request_id,
         "session_generation": mode["session_generation"],
     })
-    if not isinstance(result, dict) or result.get("status") not in {"ok", "completed"}:
+    if not isinstance(result, dict) or result.get("status") not in {"ok", "completed", "tool_requested"}:
         raise OAGraphRoutingError("OA graph ingress failed closed")
     return result

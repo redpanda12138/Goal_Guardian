@@ -3,7 +3,7 @@ MAS系统统一的AI调用模块
 支持OpenAI GPT和智谱AI
 """
 import os
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 
 # 从环境变量获取配置
 AI_SERVER = os.getenv('AI_SERVER', 'ZHIPU')  # 默认使用智谱AI
@@ -30,6 +30,71 @@ def _get_zhipu_client():
         from zhipuai import ZhipuAI
         _zhipu_client = ZhipuAI(api_key=ZHIPU_AI_API_KEY)
     return _zhipu_client
+
+
+def _message_field(value: Any, name: str, default=None):
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _normalize_model_message(message: Any) -> Dict[str, Any]:
+    normalized_calls = []
+    for tool_call in _message_field(message, "tool_calls", None) or []:
+        function = _message_field(tool_call, "function")
+        normalized_calls.append({
+            "id": _message_field(tool_call, "id"),
+            "function": {
+                "name": _message_field(function, "name"),
+                "arguments": _message_field(function, "arguments"),
+            },
+        })
+    return {
+        "content": _message_field(message, "content"),
+        "tool_calls": normalized_calls,
+    }
+
+
+def _convert_zhipu_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    converted = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        if role == "assistant" and (
+            not converted or converted[-1].get("role") == "system"
+        ):
+            role = "user"
+        converted.append({"role": role, "content": msg.get("content", "")})
+    return converted
+
+
+def ask_ai_message(
+    messages: List[Dict[str, str]],
+    temperature: float = 0.7,
+    tools: Optional[List] = None,
+) -> Dict[str, Any]:
+    """Return provider-neutral content and tool calls without executing tools."""
+    if AI_SERVER.upper() == "ZHIPU":
+        if not ZHIPU_AI_API_KEY:
+            raise ValueError("ZHIPU_AI_API_KEY environment variable is not set")
+        client = _get_zhipu_client()
+        params = {
+            "model": ZHIPU_AI_MODEL,
+            "messages": _convert_zhipu_messages(messages),
+            "temperature": temperature,
+            "stream": False,
+        }
+    else:
+        client = _get_openai_client()
+        params = {
+            "model": OPENAI_MODEL,
+            "messages": messages,
+            "temperature": temperature,
+        }
+    if tools:
+        params["tools"] = tools
+        params["tool_choice"] = "auto"
+    response = client.chat.completions.create(**params)
+    return _normalize_model_message(response.choices[0].message)
 
 
 def ask_ai(messages: List[Dict[str, str]], temperature: float = 0.7, tools: Optional[List] = None) -> str:

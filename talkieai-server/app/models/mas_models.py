@@ -1,7 +1,7 @@
 """
 MAS系统相关的数据模型
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt, validator
 from typing import Optional, List, Dict, Any
 
 from app.models.mas_workflow_models import ToolRequest
@@ -46,3 +46,10 @@ class ExecuteWorkflowToolDTO(BaseModel):
 
     tool_request: ToolRequest
     confirmed: bool = False
+    turn_index: Optional[StrictInt] = None
+
+    @validator("turn_index")
+    def validate_turn_index(cls, value):
+        if value is not None and (type(value) is not int or not 0 <= value <= 15):
+            raise ValueError("turn_index must be between 0 and 15")
+        return value

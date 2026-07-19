@@ -48,6 +48,22 @@ def test_graph_mode_uses_latched_generation_and_only_oa_ingress():
     assert gateway.calls[1][2]["data"] == {"patient_id": "p", "user_input": "hello", "turn_index": 6, "request_id": "stable", "session_generation": 7}
 
 
+def test_tool_request_is_a_valid_graph_ingress_result():
+    gateway = Gateway([
+        {"status": "ok", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 7},
+        {
+            "status": "tool_requested",
+            "model_message": {
+                "content": None,
+                "tool_calls": [{"function": {"name": "get_weekly_progress", "arguments": "{}"}}],
+            },
+        },
+    ])
+    with patch("app.services.mas.oa_graph_seam.Config.MAS_OA_GRAPH_SEAM_ENABLED", True):
+        result = run(route_if_latched_graph(gateway, "p", "progress", 7, "stable"))
+    assert result["status"] == "tool_requested"
+
+
 def test_latched_graph_continues_when_new_session_rollout_is_off():
     gateway = Gateway([
         {"status": "ok", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 2},

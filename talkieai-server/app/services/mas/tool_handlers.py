@@ -8,6 +8,7 @@ from app.services.mas.coach_dashboard_service import CoachDashboardService
 from app.services.mas.mas_gateway_service import MASGatewayService
 from app.services.mas.patient_mapping_service import PatientMappingService
 from app.services.mas.tool_executor import MASToolExecutor
+from mas.common.tool_catalog import openai_tool_catalog as _openai_tool_catalog
 
 
 def build_account_tool_handlers(db: Session, account_id: str):
@@ -55,58 +56,4 @@ async def execute_account_tool(
 
 
 def openai_tool_catalog():
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": ToolName.GET_WEEKLY_PROGRESS.value,
-                "description": "Read the authenticated user's weekly SMART goal progress.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "window": {
-                            "type": "string",
-                            "enum": ["5", "10", "all"],
-                            "description": "Dashboard history window.",
-                        }
-                    },
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": ToolName.MARK_GOAL_COMPLETE.value,
-                "description": "Mark one SMART goal complete after explicit user confirmation.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "goal_index": {"type": "integer", "minimum": 0},
-                        "note": {"type": "string", "minLength": 1, "maxLength": 500},
-                    },
-                    "required": ["goal_index"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": ToolName.RESCHEDULE_REVIEW.value,
-                "description": "Reschedule the next weekly review after explicit user confirmation.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "date": {
-                            "type": "string",
-                            "format": "date-time",
-                            "description": "Timezone-aware ISO 8601 timestamp.",
-                        }
-                    },
-                    "required": ["date"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    ]
+    return _openai_tool_catalog()
