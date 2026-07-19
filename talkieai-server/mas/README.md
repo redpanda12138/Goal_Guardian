@@ -59,3 +59,27 @@ curl -X POST localhost:8002/trigger \
 ```
 
 Replace `patient_1` with the desired patient_id. This will initiate a SMART goal review session immediately for that patient, bypassing the scheduled review time.
+
+## Optional OA LangGraph routing
+
+LangGraph is embedded in the existing OA service; it does not add another service or database. The legacy routing path remains the default.
+
+Use the two rollout switches in `talkieai-server/.env`:
+
+```dotenv
+# Main-backend capability switch. Keep false until the updated OA is deployed.
+MAS_OA_GRAPH_SEAM_ENABLED=false
+
+# OA rollout switch. Only newly reset/created session generations are affected.
+OA_LANGGRAPH_NEW_SESSIONS_ENABLED=false
+```
+
+Recommended rollout order:
+
+1. Deploy or rebuild OA with both switches set to `false`.
+2. Set `MAS_OA_GRAPH_SEAM_ENABLED=true` and restart the main backend.
+3. Verify existing legacy sessions still route normally.
+4. Set `OA_LANGGRAPH_NEW_SESSIONS_ENABLED=true` and restart OA.
+5. Reset one test patient's session and verify that `/workflow_mode/{patient_id}` reports `graph_v1`.
+
+To stop allocating new graph sessions, set only `OA_LANGGRAPH_NEW_SESSIONS_ENABLED=false`. Existing `graph_v1` session generations remain latched until reset. Keep the main-backend seam enabled while any graph session is active.
