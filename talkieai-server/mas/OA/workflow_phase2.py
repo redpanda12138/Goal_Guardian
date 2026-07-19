@@ -33,6 +33,31 @@ def reset_and_latch(record):
     return record
 
 
+def reset_patient_session(load_records, save_records, patient_id):
+    with _reservation_lock:
+        records = load_records()
+        record = next((item for item in records if item.get("patient_id") == patient_id), None)
+        if record is None:
+            record = {"patient_id": patient_id}
+            records.append(record)
+        reset_and_latch(record)
+        save_records(records)
+        return dict(record)
+
+
+def reset_active_sessions(load_records, save_records):
+    with _reservation_lock:
+        records = load_records()
+        reset_count = 0
+        for record in records:
+            if record.get("turn_index", 0) > 0 or record.get("chat_history"):
+                reset_and_latch(record)
+                reset_count += 1
+        if reset_count:
+            save_records(records)
+        return reset_count
+
+
 def reserve_graph_dispatch(load_records, save_records, patient_id, generation, request_id, turn_index, event_type="user_turn", requested_agent=None, user_input=None):
     with _reservation_lock:
         # Reload and persist under one process-local critical section. Callers must

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 import app as oa_app
 import workflow_phase2
-from workflow_phase2 import reserve_graph_dispatch, reset_and_latch, session_identity
+from workflow_phase2 import reserve_graph_dispatch, reset_active_sessions, reset_and_latch, reset_patient_session, session_identity
 
 
 def test_flag_defaults_off_and_latches_only_on_reset(monkeypatch):
@@ -82,6 +82,38 @@ def test_independent_stale_snapshots_cannot_create_duplicate_reservations():
     assert list(record["graph_transition_reservations"]) == ["same"]
     assert record["chat_history"] == [{"role": "user", "content": "hello"}]
     assert len(saves) == 1
+
+
+def test_reset_and_ingress_share_one_atomic_generation_boundary(monkeypatch):
+    monkeypatch.setenv("OA_LANGGRAPH_NEW_SESSIONS_ENABLED", "true")
+    durable = {"records": [{"patient_id": "p", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 2, "turn_index": 6, "chat_history": []}]}
+    def load():
+        return deepcopy(durable["records"])
+    def save(records):
+        durable["records"] = deepcopy(records)
+    errors = []
+    def reserve():
+        try:
+            reserve_graph_dispatch(load, save, "p", 2, "r", 6, user_input="hello")
+        except ValueError as error:
+            errors.append(str(error))
+    threads = [Thread(target=reserve), Thread(target=lambda: reset_patient_session(load, save, "p"))]
+    for thread in threads: thread.start()
+    for thread in threads: thread.join()
+    record = durable["records"][0]
+    assert record["session_generation"] == 3
+    assert record["workflow_mode"] == "graph_v1"
+    assert record["graph_transition_reservations"] == {}
+    assert record["chat_history"] == []
+    assert errors in ([], ["stale_session_generation"])
+
+
+def test_batch_reset_uses_the_same_atomic_latch_helper(monkeypatch):
+    monkeypatch.setenv("OA_LANGGRAPH_NEW_SESSIONS_ENABLED", "false")
+    records = [{"patient_id": "p", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 4, "turn_index": 1, "chat_history": [{"role": "user", "content": "x"}], "graph_transition_reservations": {"r": {"status": "completed", "agent": "SOA"}}}]
+    assert reset_active_sessions(lambda: records, lambda value: None) == 1
+    assert session_identity(records[0]) == {"workflow_mode": "legacy", "workflow_version": "legacy", "session_generation": 5}
+    assert records[0]["graph_transition_reservations"] == {}
 
 
 def test_dispatch_failure_is_indeterminate_and_retry_is_not_false_success():

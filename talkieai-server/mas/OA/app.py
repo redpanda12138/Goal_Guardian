@@ -15,7 +15,7 @@ for common_dir in (
 
 from mas_memory_store import load_json, save_json, memory_exists
 from runtime_config import orchestration_enabled
-from workflow_phase2 import reserve_graph_dispatch, reset_and_latch, session_identity, transition_dispatch
+from workflow_phase2 import reserve_graph_dispatch, reset_active_sessions, reset_patient_session, session_identity, transition_dispatch
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/extract"
@@ -209,15 +209,7 @@ def reset_patient_session_state(patient_id: str) -> None:
     定时预约再次触发 SOA 时，若开场白与上一轮最后一条 assistant 相同，
     receive_message 会去重跳过，导致用户看不到“新回合”——故调度触发前必须先重置。
     """
-    records = load_goal_reviews()
-    patient_entry = next((r for r in records if r.get("patient_id") == patient_id), None)
-    if not patient_entry:
-        patient_entry = {"patient_id": patient_id}
-        records.append(patient_entry)
-        reset_and_latch(patient_entry)
-    else:
-        reset_and_latch(patient_entry)
-    save_goal_reviews(records)
+    reset_patient_session(load_goal_reviews, save_goal_reviews, patient_id)
     print(
         f"🗓️ Reset OA session state for {patient_id} before scheduled SOA trigger",
         flush=True,
@@ -326,17 +318,9 @@ def orchestration_loop():
                 if now_slot.hour == 2 and now_slot.minute == 0 and last_reset_date != now_slot.date():
                     print(f"[{now_slot}] Auto-resetting all session counts...", flush=True)
                     try:
-                        records = load_goal_reviews()
-                        reset_count = 0
-                        
-                        for patient_entry in records:
-                            if patient_entry.get("turn_index", 0) > 0 or len(patient_entry.get("chat_history", [])) > 0:
-                                reset_and_latch(patient_entry)
-                                reset_count += 1
+                        reset_count = reset_active_sessions(load_goal_reviews, save_goal_reviews)
                         
                         if reset_count > 0:
-                            save_goal_reviews(records)
-                            
                             print(f"[{now_slot}] Auto-reset completed: {reset_count} sessions reset", flush=True)
                         else:
                             print(f"[{now_slot}] No sessions to reset", flush=True)
@@ -796,18 +780,10 @@ async def reset_all_sessions():
     """
     重置所有患者的会话状态（用于定时任务）
     """
-    records = load_goal_reviews()
-    reset_count = 0
-    
-    for patient_entry in records:
-        if patient_entry.get("turn_index", 0) > 0 or len(patient_entry.get("chat_history", [])) > 0:
-            reset_and_latch(patient_entry)
-            reset_count += 1
+    reset_count = reset_active_sessions(load_goal_reviews, save_goal_reviews)
     
     # 保存更新后的记录
     if reset_count > 0:
-        save_goal_reviews(records)
-        
         print(f"Reset all sessions: {reset_count} patients reset", flush=True)
     
     return {
