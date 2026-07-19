@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import yaml
 
@@ -25,5 +26,14 @@ def test_six_service_topology_is_unchanged():
 
 def test_langgraph_is_confined_to_oa():
     allowed = {OA / "requirements.txt", OA / "requirements-langgraph-phase1-candidate.txt", OA / "requirements-langgraph-phase1-probe.txt", OA / "requirements-langgraph-phase1.lock", ROOT / "requirements-mas-checkpoint-probe.txt"}
-    offenders = [path for path in ROOT.rglob("requirements*.txt") if "langgraph" in path.read_text(encoding="utf-8").lower() and path not in allowed]
+    requirement_files = []
+    ignored_dirs = {"myenv", ".venv", "venv", "__pycache__", ".pytest_cache"}
+    for current, dirs, files in os.walk(ROOT):
+        dirs[:] = [name for name in dirs if name not in ignored_dirs]
+        requirement_files.extend(
+            Path(current) / name
+            for name in files
+            if name.startswith("requirements") and name.endswith(".txt")
+        )
+    offenders = [path for path in requirement_files if "langgraph" in path.read_text(encoding="utf-8").lower() and path not in allowed]
     assert offenders == []
