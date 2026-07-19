@@ -79,6 +79,7 @@ def save_message(new_record):
     records = load_goal_reviews()
 
     updated = False
+    overflow_patient_id = None
     for record in records:
         if record.get("patient_id") == new_record.get("patient_id"):
             if "chat_history" in new_record:
@@ -109,8 +110,8 @@ def save_message(new_record):
                 # 如果超过15，自动重置（防止历史累积）
                 if assistant_count > 15:
                     print(f"⚠️ Warning: turn_index ({assistant_count}) exceeds 15 for patient {record.get('patient_id')}. Auto-resetting in save_message.", flush=True)
-                    record["turn_index"] = 0
-                    record["chat_history"] = []
+                    overflow_patient_id = record.get("patient_id")
+                    break
                 else:
                     record["turn_index"] = assistant_count
             
@@ -127,6 +128,13 @@ def save_message(new_record):
             
             updated = True
             break
+
+    if overflow_patient_id:
+        # Discard this stale snapshot. The atomic helper reloads latest state,
+        # advances generation, clears reservations, and persists under the same
+        # lock used by graph ingress.
+        reset_patient_session(load_goal_reviews, save_goal_reviews, overflow_patient_id)
+        return
 
     if not updated:
         # 对于新记录，也计算turn_index
@@ -666,13 +674,13 @@ async def get_session_status(patient_id: str):
         print(f"⚠️ Warning: turn_index ({turn_index}) exceeds 15 for patient {patient_id}. Auto-resetting session.", flush=True)
         old_turn_index = turn_index
         old_history_len = chat_history_len
-        patient_entry["turn_index"] = 0
-        patient_entry["chat_history"] = []
         try:
-            save_goal_reviews(records)
+            reset_patient_session(load_goal_reviews, save_goal_reviews, patient_id)
+            records = load_goal_reviews()
+            patient_entry = next(r for r in records if r.get("patient_id") == patient_id)
             print(f"✅ Auto-reset completed: patient {patient_id} turn_index {old_turn_index} -> 0, chat_history {old_history_len} -> 0", flush=True)
-            turn_index = 0
-            chat_history_len = 0
+            turn_index = patient_entry.get("turn_index", 0)
+            chat_history_len = len(patient_entry.get("chat_history", []))
         except Exception as e:
             print(f"❌ Failed to auto-reset: {e}", flush=True)
     

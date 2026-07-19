@@ -116,6 +116,28 @@ def test_batch_reset_uses_the_same_atomic_latch_helper(monkeypatch):
     assert records[0]["graph_transition_reservations"] == {}
 
 
+def test_save_message_overflow_discards_old_snapshot_and_atomically_latches(monkeypatch):
+    monkeypatch.setenv("OA_LANGGRAPH_NEW_SESSIONS_ENABLED", "true")
+    records = [{"patient_id": "p", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 2, "turn_index": 15, "chat_history": [{"role": "assistant", "content": str(index)} for index in range(15)], "graph_transition_reservations": {"old": {"status": "completed", "agent": "SCA"}}}]
+    saves = []
+    with patch.object(oa_app, "load_goal_reviews", return_value=records), patch.object(oa_app, "save_goal_reviews", side_effect=lambda value: saves.append(deepcopy(value))):
+        oa_app.save_message({"patient_id": "p", "chat_history": [{"role": "assistant", "content": "overflow"}]})
+    record = records[0]
+    assert (record["session_generation"], record["turn_index"], record["chat_history"]) == (3, 0, [])
+    assert record["graph_transition_reservations"] == {}
+    assert len(saves) == 1
+
+
+def test_session_status_overflow_uses_atomic_reset_and_reloads(monkeypatch):
+    monkeypatch.setenv("OA_LANGGRAPH_NEW_SESSIONS_ENABLED", "false")
+    records = [{"patient_id": "p", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 4, "turn_index": 16, "chat_history": [{"role": "assistant", "content": "x"}], "graph_transition_reservations": {"old": {"status": "dispatching", "agent": "SCA"}}}]
+    with patch.object(oa_app, "load_goal_reviews", return_value=records), patch.object(oa_app, "save_goal_reviews"):
+        response = TestClient(oa_app.app).get("/session_status/p").json()
+    assert response["turn_index"] == 0
+    assert session_identity(records[0]) == {"workflow_mode": "legacy", "workflow_version": "legacy", "session_generation": 5}
+    assert records[0]["graph_transition_reservations"] == {}
+
+
 def test_dispatch_failure_is_indeterminate_and_retry_is_not_false_success():
     records = [{"patient_id": "p", "workflow_mode": "graph_v1", "workflow_version": "oa_graph_v1", "session_generation": 2}]
     calls = []
