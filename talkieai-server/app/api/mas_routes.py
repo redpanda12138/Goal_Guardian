@@ -556,6 +556,7 @@ async def send_message(
             dto.user_input,
             dto.turn_index,
             stable_graph_request_id(account_id, f"mas-route:{patient_id}", f"{dto.turn_index}:{dto.user_input}"),
+            account_id=account_id,
         )
         if graph_result is not None:
             return ApiResponse(data=graph_result)

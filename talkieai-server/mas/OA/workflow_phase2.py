@@ -1,9 +1,10 @@
 from threading import Lock
 from uuid import uuid4
 
-from runtime_config import langgraph_new_sessions_enabled
+from runtime_config import langgraph_enabled_for_patient
 from workflow_phase1.contracts import RouteDecision
 from workflow_phase1.graph import invoke_phase1_graph
+from workflow_phase1.parity import decide_legacy_parity
 
 LEGACY_MODE = "legacy"
 GRAPH_MODE = "graph_v1"
@@ -54,9 +55,38 @@ def workflow_projection(record):
     }
 
 
+def shadow_route_comparison(patient_id, request_id, turn_index, session_status):
+    """Compare pure route decisions without reading or mutating OA state."""
+    state = {
+        "patient_id": patient_id,
+        "session_generation": 1,
+        "workflow_version": GRAPH_VERSION,
+        "request_id": request_id,
+        "event_type": "user_turn",
+        "turn_index": turn_index,
+        "session_status": session_status,
+    }
+    legacy = decide_legacy_parity(state)
+    graph = invoke_phase1_graph(state)
+    return {
+        "status": "ok",
+        "matched": (
+            legacy.selected_agent == graph.selected_agent
+            and legacy.route_status == graph.route_status
+        ),
+        "legacy_selected_agent": legacy.selected_agent,
+        "graph_selected_agent": graph.selected_agent,
+        "graph_route_status": graph.route_status,
+    }
+
+
 def reset_and_latch(record):
     generation = int(record.get("session_generation", 0)) + 1
-    mode = GRAPH_MODE if langgraph_new_sessions_enabled() else LEGACY_MODE
+    mode = (
+        GRAPH_MODE
+        if langgraph_enabled_for_patient(record.get("patient_id"))
+        else LEGACY_MODE
+    )
     record.update({
         "turn_index": 0,
         "chat_history": [],

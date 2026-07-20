@@ -15,7 +15,7 @@ for common_dir in (
 
 from mas_memory_store import load_json, save_json, memory_exists
 from runtime_config import orchestration_enabled
-from workflow_phase2 import reserve_graph_dispatch, reset_active_sessions, reset_patient_session, session_identity, transition_dispatch, workflow_projection
+from workflow_phase2 import reserve_graph_dispatch, reset_active_sessions, reset_patient_session, session_identity, shadow_route_comparison, transition_dispatch, workflow_projection
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/extract"
@@ -616,6 +616,26 @@ async def graph_v1_user_turn(request: Request):
         "request_id": request_id,
         **workflow_projection(updated),
     }
+
+
+@app.post("/graph_v1/shadow_decision")
+async def graph_v1_shadow_decision(request: Request):
+    """Compare pure route decisions without reading or mutating OA state."""
+    data = await request.json()
+    patient_id = data.get("patient_id")
+    request_id = data.get("request_id")
+    turn_index = data.get("turn_index")
+    session_status = data.get("session_status", "active")
+    if (
+        not patient_id
+        or not request_id
+        or type(turn_index) is not int
+        or session_status not in {"active", "completed"}
+    ):
+        return {"status": "error", "reason": "invalid_shadow_input"}
+    return shadow_route_comparison(
+        patient_id, request_id, turn_index, session_status
+    )
 
 @app.get("/next_review_time/{patient_id}")
 async def next_review_time(patient_id: str):

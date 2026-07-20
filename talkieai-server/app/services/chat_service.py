@@ -597,6 +597,7 @@ class ChatService:
                 send_message_content,
                 current_turn_index,
                 stable_graph_request_id(account_id, session_id, str(send_message_id)),
+                account_id=account_id,
             )
         )
 

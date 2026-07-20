@@ -125,3 +125,65 @@ def test_graph_identity_and_session_status_expose_the_same_stage_projection():
     assert status["workflow_stage"] == "waiting_user"
     assert identity["workflow_phase"] == status["workflow_phase"] == "review_decision"
 
+
+@pytest.mark.parametrize(
+    "turn,expected_agent",
+    [(0, "SOA"), (6, "GRA"), (14, "SCA"), (15, None)],
+)
+def test_shadow_endpoint_compares_routes_without_any_side_effects(
+    turn, expected_agent
+):
+    with (
+        patch.object(oa_app, "load_goal_reviews") as load,
+        patch.object(oa_app, "save_goal_reviews") as save,
+        patch.object(oa_app, "dispatch_graph_user_message_sync") as dispatch,
+        patch.object(oa_app, "trigger_agent_sync") as trigger,
+    ):
+        response = TestClient(oa_app.app).post(
+            "/graph_v1/shadow_decision",
+            json={
+                "patient_id": "patient-shadow",
+                "request_id": f"shadow-{turn}",
+                "turn_index": turn,
+                "session_status": "completed" if turn == 15 else "active",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "matched": True,
+        "legacy_selected_agent": expected_agent,
+        "graph_selected_agent": expected_agent,
+        "graph_route_status": "completed" if turn == 15 else "ready",
+    }
+    load.assert_not_called()
+    save.assert_not_called()
+    dispatch.assert_not_called()
+    trigger.assert_not_called()
+
+
+def test_new_graph_sessions_can_be_restricted_to_test_patients(monkeypatch):
+    monkeypatch.setenv("OA_LANGGRAPH_NEW_SESSIONS_ENABLED", "true")
+    monkeypatch.setenv("OA_LANGGRAPH_TEST_PATIENTS", "patient-enabled, patient-two")
+
+    enabled = {"patient_id": "patient-enabled"}
+    excluded = {"patient_id": "patient-other"}
+    workflow_phase2.reset_and_latch(enabled)
+    workflow_phase2.reset_and_latch(excluded)
+
+    assert workflow_phase2.session_identity(enabled)["workflow_mode"] == "graph_v1"
+    assert workflow_phase2.session_identity(excluded)["workflow_mode"] == "legacy"
+
+
+def test_disabling_allocation_preserves_an_active_graph_generation(monkeypatch):
+    monkeypatch.setenv("OA_LANGGRAPH_NEW_SESSIONS_ENABLED", "false")
+    monkeypatch.setenv("OA_LANGGRAPH_TEST_PATIENTS", "patient-enabled")
+    active = {
+        "patient_id": "patient-enabled",
+        "workflow_mode": "graph_v1",
+        "workflow_version": "oa_graph_v1",
+        "session_generation": 4,
+    }
+
+    assert workflow_phase2.session_identity(active)["workflow_mode"] == "graph_v1"

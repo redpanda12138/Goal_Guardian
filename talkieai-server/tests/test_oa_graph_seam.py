@@ -96,6 +96,53 @@ def test_latched_graph_continues_when_new_session_rollout_is_off():
         assert run(route_if_latched_graph(gateway, "p", "last", 15, "r"))["status"] == "completed"
 
 
+def test_shadow_mode_observes_legacy_route_without_changing_the_result():
+    gateway = Gateway(
+        [
+            {
+                "status": "ok",
+                "matched": True,
+                "legacy_selected_agent": "GRA",
+                "graph_selected_agent": "GRA",
+                "graph_route_status": "ready",
+            }
+        ]
+    )
+    with (
+        patch("app.services.mas.oa_graph_seam.Config.MAS_OA_GRAPH_SEAM_ENABLED", False),
+        patch("app.services.mas.oa_graph_seam.Config.MAS_OA_GRAPH_SHADOW_ENABLED", True),
+        patch("app.services.mas.oa_graph_seam.Config.MAS_OA_GRAPH_TEST_ACCOUNTS", ""),
+    ):
+        result = run(
+            route_if_latched_graph(
+                gateway, "p", "hello", 6, "r", account_id="account-1"
+            )
+        )
+
+    assert result is None
+    assert [call[1] for call in gateway.calls] == ["/graph_v1/shadow_decision"]
+
+
+def test_non_allowlisted_account_cannot_enter_graph_mode():
+    gateway = Gateway([])
+    with (
+        patch("app.services.mas.oa_graph_seam.Config.MAS_OA_GRAPH_SEAM_ENABLED", True),
+        patch("app.services.mas.oa_graph_seam.Config.MAS_OA_GRAPH_SHADOW_ENABLED", False),
+        patch(
+            "app.services.mas.oa_graph_seam.Config.MAS_OA_GRAPH_TEST_ACCOUNTS",
+            "account-enabled",
+        ),
+    ):
+        result = run(
+            route_if_latched_graph(
+                gateway, "p", "hello", 6, "r", account_id="account-other"
+            )
+        )
+
+    assert result is None
+    assert gateway.calls == []
+
+
 @pytest.mark.parametrize("mode_response", [{}, {"status": "ok", "workflow_mode": "unknown"}, RuntimeError("OA down")])
 def test_oa_failure_or_ambiguous_mode_fails_closed_without_agent_fallback(mode_response):
     gateway = Gateway([mode_response])
