@@ -66,4 +66,3 @@ finally {
 }
 
 Write-Output "LOCAL_VALIDATION=PASS"
-
