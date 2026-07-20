@@ -28,54 +28,54 @@ model provider, or modify production data.
 
 ### Phase 1: Explicit workflow stage projection
 
-- [ ] Add failing OA tests for opening, review, waiting, closing, summary, and
+- [x] Add failing OA tests for opening, review, waiting, closing, summary, and
   completed stage projection.
-- [ ] Implement the pure stage projector and expose it in workflow/session
+- [x] Implement the pure stage projector and expose it in workflow/session
   responses without changing legacy response behavior.
-- [ ] Add failing main-backend tests and project graph stages into Dashboard
+- [x] Add failing main-backend tests and project graph stages into Dashboard
   session state only when workflow mode is `graph_v1`.
 
 ### Checkpoint 1
 
-- [ ] OA focused tests pass in the OA environment.
-- [ ] Dashboard and gateway regression tests pass in the main environment.
+- [x] OA focused tests pass in the OA environment.
+- [x] Dashboard and gateway regression tests pass in the main environment.
 
 ### Phase 2: Shadow comparison and test-only rollout
 
-- [ ] Add failing tests proving shadow decisions match legacy boundaries and
+- [x] Add failing tests proving shadow decisions match legacy boundaries and
   cause no reservations, persistence, or Agent dispatch.
-- [ ] Implement a pure OA shadow endpoint plus a main-backend opt-in seam.
-- [ ] Add test-patient and test-account allowlists with disabled-by-default,
+- [x] Implement a pure OA shadow endpoint plus a main-backend opt-in seam.
+- [x] Add test-patient and test-account allowlists with disabled-by-default,
   rollback-safe behavior.
 
 ### Checkpoint 2
 
-- [ ] Shadow and rollout tests pass.
-- [ ] Existing graph sessions remain latched when allocation is disabled.
-- [ ] Non-allowlisted identities continue through the legacy path.
+- [x] Shadow and rollout tests pass.
+- [x] Existing graph sessions remain latched when allocation is disabled.
+- [x] Non-allowlisted identities continue through the legacy path.
 
 ### Phase 3: Local validation orchestration
 
-- [ ] Add a local validation runner that launches main-backend and OA suites in
+- [x] Add a local validation runner that launches main-backend and OA suites in
   separate interpreters and reports missing environments clearly.
-- [ ] Validate Docker Compose configuration and all offline/local test scopes.
-- [ ] Run the frontend unit suite and H5 production build.
-- [ ] Perform browser checks if an executable local browser harness is
+- [x] Validate Docker Compose configuration and all offline/local test scopes.
+- [x] Run the frontend unit suite and H5 production build.
+- [x] Perform browser checks if an executable local browser harness is
   available; otherwise retain an explicit evidence boundary.
 
 ### Checkpoint 3
 
-- [ ] All executable local checks pass.
-- [ ] No network-dependent or server-only result is claimed.
-- [ ] Validation evidence records commands, results, warnings, and exclusions.
+- [x] All Batch 5 scoped local checks pass.
+- [x] No network-dependent or server-only result is claimed.
+- [x] Validation evidence records commands, results, warnings, and exclusions.
 
 ### Phase 4: Documentation and delivery
 
-- [ ] Update local configuration examples and rollout/rollback instructions.
-- [ ] Update the authoritative rewrite checklist to reflect completed work and
+- [x] Update local configuration examples and rollout/rollback instructions.
+- [x] Update the authoritative rewrite checklist to reflect completed work and
   identify only server/staging tasks as remaining.
-- [ ] Run final diff, secret, build, and regression checks.
-- [ ] Commit each verified increment and leave the worktree clean.
+- [x] Run final diff, secret, build, and regression checks.
+- [x] Commit each verified increment and leave the worktree clean.
 
 ## Risks and Mitigations
 
@@ -94,4 +94,3 @@ model provider, or modify production data.
 - Deployment rollback drill.
 - Live model-provider and production-corpus validation.
 - Domain-expert corpus and safety review.
-
