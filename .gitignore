@@ -2,6 +2,7 @@
 /talkieai-server/.env.production
 /talkieai-server/mas/.env
 /talkieai-server/myenv/
+/talkieai-server/.venv-oa/
 /talkieai-server/.pytest_cache/
 /talkieai-server/uploads/
 /talkieai-server/app.db

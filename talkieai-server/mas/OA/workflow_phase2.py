@@ -19,6 +19,41 @@ def session_identity(record):
     }
 
 
+def workflow_projection(record):
+    """Return the explicit graph phase/stage without mutating durable state."""
+    if session_identity(record)["workflow_mode"] != GRAPH_MODE:
+        return {}
+
+    turn_index = int(record.get("turn_index", 0))
+    reservations = record.get("graph_transition_reservations") or {}
+    active_agent = None
+    for reservation in reversed(list(reservations.values())):
+        if reservation.get("status") in {"reserved", "dispatching"}:
+            active_agent = reservation.get("agent")
+            break
+
+    if active_agent == "SSA" or turn_index >= 15:
+        phase = "summary"
+    elif active_agent == "SCA" or turn_index == 14:
+        phase = "closing"
+    elif active_agent == "GRA" or turn_index >= 6:
+        phase = "review_decision"
+    else:
+        phase = "opening"
+
+    history = record.get("chat_history") or []
+    waiting_for_user = (
+        active_agent is None
+        and turn_index < 15
+        and bool(history)
+        and history[-1].get("role") == "assistant"
+    )
+    return {
+        "workflow_phase": phase,
+        "workflow_stage": "waiting_user" if waiting_for_user else phase,
+    }
+
+
 def reset_and_latch(record):
     generation = int(record.get("session_generation", 0)) + 1
     mode = GRAPH_MODE if langgraph_new_sessions_enabled() else LEGACY_MODE

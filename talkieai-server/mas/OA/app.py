@@ -15,7 +15,7 @@ for common_dir in (
 
 from mas_memory_store import load_json, save_json, memory_exists
 from runtime_config import orchestration_enabled
-from workflow_phase2 import reserve_graph_dispatch, reset_active_sessions, reset_patient_session, session_identity, transition_dispatch
+from workflow_phase2 import reserve_graph_dispatch, reset_active_sessions, reset_patient_session, session_identity, transition_dispatch, workflow_projection
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/extract"
@@ -561,7 +561,12 @@ async def trigger_agent(request: Request):
 @app.get("/workflow_mode/{patient_id}")
 async def workflow_mode(patient_id: str):
     record = next((item for item in load_goal_reviews() if item.get("patient_id") == patient_id), {})
-    return {"status": "ok", "patient_id": patient_id, **session_identity(record)}
+    return {
+        "status": "ok",
+        "patient_id": patient_id,
+        **session_identity(record),
+        **workflow_projection(record),
+    }
 
 
 @app.post("/graph_v1/user_turn")
@@ -601,7 +606,16 @@ async def graph_v1_user_turn(request: Request):
         transition_dispatch(load_goal_reviews, save_goal_reviews, patient_id, request_id, "dispatching", "indeterminate")
         return {"status": "error", "reason": "dispatch_indeterminate", "detail": str(error)}
     transition_dispatch(load_goal_reviews, save_goal_reviews, patient_id, request_id, "dispatching", "completed")
-    return {**result, "selected_agent": decision.selected_agent, "request_id": request_id}
+    updated = next(
+        (item for item in load_goal_reviews() if item.get("patient_id") == patient_id),
+        {},
+    )
+    return {
+        **result,
+        "selected_agent": decision.selected_agent,
+        "request_id": request_id,
+        **workflow_projection(updated),
+    }
 
 @app.get("/next_review_time/{patient_id}")
 async def next_review_time(patient_id: str):
@@ -704,6 +718,14 @@ async def get_session_status(patient_id: str):
     # 计算user和assistant消息的数量，用于调试
     user_count = sum(1 for msg in patient_entry.get("chat_history", []) if msg.get("role") == "user")
     assistant_count = sum(1 for msg in patient_entry.get("chat_history", []) if msg.get("role") == "assistant")
+    projection = workflow_projection(patient_entry)
+    if projection:
+        current_agent = {
+            "opening": "SOA",
+            "review_decision": "GRA",
+            "closing": "SCA",
+            "summary": "SSA",
+        }[projection["workflow_phase"]]
     print(f"📋 Session status for patient {patient_id}: turn_index={turn_index} (assistant_msgs={assistant_count}, user_msgs={user_count}, total_msgs={chat_history_len}), session_status={session_status}, current_agent={current_agent}", flush=True)
     
     return {
@@ -712,7 +734,8 @@ async def get_session_status(patient_id: str):
         "turn_index": turn_index,
         "current_agent": current_agent,
         "session_status": session_status,
-        "total_turns": chat_history_len
+        "total_turns": chat_history_len,
+        **projection,
     }
 
 @app.post("/reset_session/{patient_id}")

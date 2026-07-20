@@ -17,6 +17,29 @@ from app.services.mas.patient_mapping_service import PatientMappingService
 
 LEDGER_KEY_PREFIX = "mas_coach_ledger_"
 WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+WORKFLOW_PHASES = {"opening", "review_decision", "closing", "summary"}
+WORKFLOW_STAGES = WORKFLOW_PHASES | {"waiting_user"}
+
+
+def _project_session_status(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("workflow_mode") != "graph_v1":
+        return payload
+    valid = (
+        payload.get("workflow_version") == "oa_graph_v1"
+        and type(payload.get("session_generation")) is int
+        and payload["session_generation"] >= 1
+        and payload.get("workflow_phase") in WORKFLOW_PHASES
+        and payload.get("workflow_stage") in WORKFLOW_STAGES
+    )
+    if not valid:
+        return {
+            "status": "error",
+            "workflow_mode": "graph_v1",
+            "reason": "invalid_workflow_projection",
+        }
+    return {**payload, "stage_source": "workflow_state"}
 
 
 def _week_id() -> str:
@@ -454,6 +477,7 @@ class CoachDashboardService:
             )
         except Exception:
             session_payload = {}
+        session_payload = _project_session_status(session_payload)
 
         return {
             "patient_id": patient_id,

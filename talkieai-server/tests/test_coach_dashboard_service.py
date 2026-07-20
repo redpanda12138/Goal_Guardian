@@ -159,6 +159,72 @@ def test_build_dashboard_includes_review_sections(coach_module, db_session):
     assert dashboard["overall_review"]["window"] == "5"
 
 
+def test_graph_dashboard_uses_a_validated_workflow_stage_projection(
+    coach_module, db_session
+):
+    StubMASGatewayService.responses[
+        ("oa", "/session_status/patient-acct-1", "GET")
+    ] = {
+        "status": "ok",
+        "session_status": "active",
+        "workflow_mode": "graph_v1",
+        "workflow_version": "oa_graph_v1",
+        "session_generation": 3,
+        "workflow_phase": "review_decision",
+        "workflow_stage": "waiting_user",
+    }
+
+    dashboard = asyncio.run(
+        coach_module.CoachDashboardService.build_dashboard(db_session, "acct-1")
+    )
+
+    assert dashboard["session_status"]["workflow_stage"] == "waiting_user"
+    assert dashboard["session_status"]["stage_source"] == "workflow_state"
+
+
+def test_invalid_graph_stage_fails_closed_without_breaking_dashboard(
+    coach_module, db_session
+):
+    StubMASGatewayService.responses[
+        ("oa", "/session_status/patient-acct-1", "GET")
+    ] = {
+        "status": "ok",
+        "session_status": "active",
+        "workflow_mode": "graph_v1",
+        "workflow_version": "oa_graph_v1",
+        "session_generation": 3,
+        "workflow_phase": "review_decision",
+        "workflow_stage": "arbitrary_model_stage",
+    }
+
+    dashboard = asyncio.run(
+        coach_module.CoachDashboardService.build_dashboard(db_session, "acct-1")
+    )
+
+    assert dashboard["session_status"] == {
+        "status": "error",
+        "workflow_mode": "graph_v1",
+        "reason": "invalid_workflow_projection",
+    }
+
+
+def test_legacy_dashboard_session_payload_remains_unchanged(coach_module, db_session):
+    legacy = {
+        "status": "ok",
+        "session_status": "active",
+        "current_agent": "GRA",
+    }
+    StubMASGatewayService.responses[
+        ("oa", "/session_status/patient-acct-1", "GET")
+    ] = legacy
+
+    dashboard = asyncio.run(
+        coach_module.CoachDashboardService.build_dashboard(db_session, "acct-1")
+    )
+
+    assert dashboard["session_status"] == legacy
+
+
 def test_save_ledger_preserves_weekly_history(coach_module, db_session):
     db_session.add(
         FakeSysCacheEntity(

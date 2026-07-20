@@ -13,7 +13,10 @@ def after_validation(state: GraphState) -> str:
     return "invalid" if state.get("route_status") == "error" else "valid"
 
 def classify_session(state: GraphState) -> GraphState:
-    if state["turn_index"] == 15 or state["session_status"] == "completed":
+    if (
+        state["event_type"] != "agent_transition_intent"
+        and (state["turn_index"] == 15 or state["session_status"] == "completed")
+    ):
         return {**state, "route_status": "completed", "route_reason": "session_completed"}
     return state
 
@@ -30,10 +33,14 @@ def after_classification(state: GraphState) -> str:
     return "transition" if state["event_type"] == "agent_transition_intent" else "active"
 
 def validate_transition_intent(state: GraphState) -> GraphState:
-    expected = decide_legacy_parity(state)
-    if state.get("requested_agent") != expected.selected_agent:
+    expected_agent = (
+        "SSA"
+        if state["turn_index"] == 15
+        else decide_legacy_parity(state).selected_agent
+    )
+    if state.get("requested_agent") != expected_agent:
         return {**state, "route_status": "error", "route_reason": "transition_conflict"}
-    return {**state, "selected_agent": expected.selected_agent, "route_status": "ready", "route_reason": "transition_approved"}  # type: ignore[typeddict-item]
+    return {**state, "selected_agent": expected_agent, "route_status": "ready", "route_reason": "transition_approved"}  # type: ignore[typeddict-item]
 
 def emit_route_error(state: GraphState) -> GraphState:
     result = dict(state); result.pop("selected_agent", None)
