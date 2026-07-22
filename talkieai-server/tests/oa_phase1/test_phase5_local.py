@@ -163,6 +163,32 @@ def test_shadow_endpoint_compares_routes_without_any_side_effects(
     trigger.assert_not_called()
 
 
+def test_graph_dispatch_normalizes_legacy_agent_success_status():
+    response = oa_app.normalize_graph_agent_response(
+        {
+            "status": "message processed",
+            "turn_index": 2,
+            "assistant_message": "Thanks for sharing.",
+            "persisted": True,
+        }
+    )
+
+    assert response == {
+        "status": "ok",
+        "legacy_status": "message processed",
+        "turn_index": 2,
+        "assistant_message": "Thanks for sharing.",
+        "persisted": True,
+    }
+
+
+def test_graph_dispatch_rejects_agent_failure_status():
+    with pytest.raises(RuntimeError, match="Patient session not found"):
+        oa_app.normalize_graph_agent_response(
+            {"status": "error", "reason": "Patient session not found"}
+        )
+
+
 def test_new_graph_sessions_can_be_restricted_to_test_patients(monkeypatch):
     monkeypatch.setenv("OA_LANGGRAPH_NEW_SESSIONS_ENABLED", "true")
     monkeypatch.setenv("OA_LANGGRAPH_TEST_PATIENTS", "patient-enabled, patient-two")

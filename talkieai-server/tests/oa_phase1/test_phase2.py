@@ -189,7 +189,9 @@ def test_graph_dispatch_marks_the_agent_request_as_graph_mode():
             "patient-1", 7, "GRA", "How am I doing?"
         )
 
-    assert result["status"] == "message processed"
+    assert result["status"] == "ok"
+    assert result["legacy_status"] == "message processed"
+    assert result["persisted"] is True
     assert post.call_args.kwargs["json"] == {
         "patient_id": "patient-1",
         "turn_index": 7,

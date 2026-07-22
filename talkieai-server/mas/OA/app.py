@@ -202,6 +202,32 @@ def trigger_agent_sync(patient_id: str, turn_index: int, agent_to_trigger: str) 
         return {"status": "error", "reason": str(e)}
 
 
+def normalize_graph_agent_response(body: dict) -> dict:
+    if not isinstance(body, dict):
+        raise RuntimeError("selected Agent returned a non-object response")
+
+    raw_status = body.get("status")
+    status = str(raw_status or "").strip().lower()
+    if status in {"error", "failed"}:
+        reason = body.get("reason") or body.get("message") or "selected Agent failed"
+        raise RuntimeError(reason)
+    if status in {"ok", "completed", "tool_requested"}:
+        return body
+    if status in {
+        "message processed",
+        "message_processed",
+        "soa triggered",
+        "gra triggered",
+        "sca triggered",
+    }:
+        return {
+            **body,
+            "status": "ok",
+            "legacy_status": raw_status,
+        }
+    raise RuntimeError(f"unsupported Agent response status: {raw_status}")
+
+
 def dispatch_graph_user_message_sync(patient_id: str, turn_index: int, agent_to_trigger: str, user_input: str) -> dict:
     url = AGENT_URL.format(agent=agent_to_trigger.lower()).replace("/trigger", "/receive_message")
     response = requests.post(url, json={
@@ -212,9 +238,7 @@ def dispatch_graph_user_message_sync(patient_id: str, turn_index: int, agent_to_
     }, timeout=(3, 120))
     response.raise_for_status()
     body = response.json()
-    if not isinstance(body, dict) or body.get("status") in {"error", "failed"}:
-        raise RuntimeError("selected Agent returned an invalid response")
-    return body
+    return normalize_graph_agent_response(body)
 
 def reset_patient_session_state(patient_id: str) -> None:
     """
