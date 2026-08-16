@@ -98,6 +98,23 @@ class LatencyRegressionTest(unittest.TestCase):
             self.assertIn("_get_zhipu_client", helper_source)
             self.assertIn("await run_blocking(ask_gpt", app_source)
 
+    def test_soa_allows_long_running_agent_transition_to_finish(self):
+        source = (SERVER_ROOT / "mas" / "SOA" / "app.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("AGENT_TRANSITION_TIMEOUT_SECONDS", source)
+        self.assertNotIn("timeout=10", source)
+
+    def test_oa_runs_legacy_agent_transition_off_the_event_loop(self):
+        source = (SERVER_ROOT / "mas" / "OA" / "app.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("await asyncio.to_thread(", source)
+        self.assertIn("trigger_agent_sync,", source)
+        self.assertNotIn("timeout=(3, 25)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

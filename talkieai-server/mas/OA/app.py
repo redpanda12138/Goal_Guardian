@@ -21,6 +21,7 @@ from workflow_phase2 import reserve_graph_dispatch, reset_active_sessions, reset
 MMA_URL = "http://mma:8000/extract"
 AGENT_URL = "http://{agent}:8000/trigger"
 SERVICE_NAME = "oa"
+AGENT_TRANSITION_TIMEOUT_SECONDS = int(os.getenv("MAS_AGENT_TRANSITION_TIMEOUT_SECONDS", "90"))
 
 SESSION_NOTES_FILE = Path("memory/session_notes_mock.json")
 REVIEW_SCHEDULE_FILE = Path("memory/review_schedule.json")
@@ -180,7 +181,11 @@ def trigger_agent_sync(patient_id: str, turn_index: int, agent_to_trigger: str) 
 
     try:
         # 关键：给外部服务调用加 timeout，避免 OA 在某次触发中卡死
-        response = requests.post(url, json=payload, timeout=(3, 25))
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=(3, AGENT_TRANSITION_TIMEOUT_SECONDS),
+        )
         response.raise_for_status()
         try:
             body = response.json()
@@ -566,7 +571,12 @@ async def trigger_agent(request: Request):
         if not claimed:
             return {"status": "error", "reason": f"dispatch_{current}"}
         try:
-            result = trigger_agent_sync(patient_id, turn_index, decision.selected_agent)
+            result = await asyncio.to_thread(
+                trigger_agent_sync,
+                patient_id,
+                turn_index,
+                decision.selected_agent,
+            )
             if result.get("status") != "ok":
                 raise RuntimeError(result.get("reason") or "Agent trigger failed")
         except Exception as error:
@@ -579,7 +589,12 @@ async def trigger_agent(request: Request):
     if not agent_to_trigger:
         return {"status": "error", "reason": "Missing agent_to_trigger"}
 
-    return trigger_agent_sync(patient_id, turn_index, agent_to_trigger)
+    return await asyncio.to_thread(
+        trigger_agent_sync,
+        patient_id,
+        turn_index,
+        agent_to_trigger,
+    )
 
 
 @app.get("/workflow_mode/{patient_id}")

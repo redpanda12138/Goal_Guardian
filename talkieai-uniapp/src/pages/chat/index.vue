@@ -180,6 +180,10 @@ import accountRequest from "@/api/account";
 import topicRequest from "@/api/topic";
 import utils from "@/utils/utils";
 import { markHomeRefreshNeeded } from "@/utils/pageRefreshState";
+import {
+  createActionGate,
+  isRequestTimeoutError,
+} from "@/utils/chatRequestPolicy.mjs";
 import audioPlayer from "@/components/audioPlayerExecuter";
 import type {
   AccountSettings,
@@ -205,6 +209,8 @@ const session = ref<Session>({
   messages: { total: 0, list: [] } as MessagePage,
 });
 const messages = ref<Message[]>([]);
+const messageSendGate = createActionGate();
+const newSessionGate = createActionGate();
 const inputTypeVoice = ref(true);
 const inputText = ref("");
 /** 当前待发送的录音文件名（录音完成后保留；删除/发送后清空） */
@@ -652,6 +658,13 @@ const sendSpeech = (fileName: string) => {
  * @param fileName 如果是语音发送, 则传入文件名
  */
 const sendMessage = (message?: string, fileName?: string) => {
+  if (!messageSendGate.enter()) {
+    uni.showToast({
+      title: "Your previous message is still being processed",
+      icon: "none",
+    });
+    return;
+  }
   console.log('send file name');
   const ownertTimestamp = new Date().getTime();
   const ownMessage: any = {
@@ -731,14 +744,21 @@ const sendMessage = (message?: string, fileName?: string) => {
       }
     })
     .catch((e) => {
-      // 为用户提示错误show toast
+      const timedOut = isRequestTimeoutError(e);
       uni.showToast({
-        title: 'fail to send..',
+        title: timedOut
+          ? "The reply is still processing. Reopen this chat shortly."
+          : "Failed to send message",
         icon: "none",
       });
       console.error(e);
-      messages.value.pop();
-      messages.value.pop();
+      messages.value = messages.value.filter((item) => {
+        const id = item.id as any;
+        return id !== timestamp && (timedOut || id !== ownertTimestamp);
+      });
+    })
+    .finally(() => {
+      messageSendGate.leave();
     });
 };
 
@@ -1039,6 +1059,13 @@ const selectHistorySession = (item: { id: string }) => {
  * 开始新会话
  */
 const handleStartNewSession = () => {
+  if (!newSessionGate.enter()) {
+    uni.showToast({
+      title: "A new session is already being created",
+      icon: "none",
+    });
+    return;
+  }
   chatRequest.sessionMasCreate().then((data) => {
     console.log("New MAS session:", data);
     if (data && data.data && data.data.id) {
@@ -1062,6 +1089,8 @@ const handleStartNewSession = () => {
       icon: "none",
       duration: 3000,
     });
+  }).finally(() => {
+    newSessionGate.leave();
   });
 };
 

@@ -23,6 +23,7 @@ OA_URL = "http://oa:8000/receive_message"
 OA_USER_URL = "http://oa:8000/receive_user_message"
 GRA_URL = "http://oa:8000/trigger_agent"
 REQUEST_TIMEOUT_SECONDS = 15
+AGENT_TRANSITION_TIMEOUT_SECONDS = 90
 
 MEMORY_FILE = Path("/app/memory/soa_conversations.json")
 SERVICE_NAME = "soa"
@@ -340,7 +341,7 @@ async def _receive_message_locked(data):
                 "patient_id": patient_id,
                 "turn_index": turn_index,
                 "agent_to_trigger": agent_to_trigger
-            }, timeout=10)
+            }, timeout=AGENT_TRANSITION_TIMEOUT_SECONDS)
             if gra_response.status_code == 200:
                 print(f"Triggered {agent_to_trigger} for patient {patient_id}", flush=True)
                 # 等待一下，确保GRA的消息已经到达OA并更新turn_index

@@ -9,6 +9,7 @@ from app.models.account_models import *
 from app.models.chat_models import *
 from app.services.account_service import AccountService
 from app.services.topic_service import TopicService
+from app.services.mas.session_creation_policy import is_recent_session
 
 from app.ai.models import *
 from app.ai import chat_ai
@@ -1207,6 +1208,22 @@ class ChatService:
         
         创建新会话时，会重置OA中该患者的会话计数（turn_index和chat_history）
         """
+        # 移动端重复点击或预约跳转与手动跳转重叠时，复用刚创建的会话。
+        # 这一步必须发生在 OA reset 之前，否则一次用户动作会把同一轮状态重置多次。
+        recent_session = (
+            self.db.query(MessageSessionEntity)
+            .filter_by(
+                account_id=account_id,
+                type="MAS",
+                completed=0,
+                deleted=0,
+            )
+            .order_by(MessageSessionEntity.create_time.desc())
+            .first()
+        )
+        if recent_session and is_recent_session(recent_session.create_time):
+            return self.__convert_session_model(recent_session)
+
         # 创建数据库会话
         session = self.create_session(account_id, session_type="MAS")
         
