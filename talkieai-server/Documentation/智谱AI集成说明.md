@@ -35,7 +35,7 @@ environment:
   - OPENAI_API_KEY=${OPENAI_API_KEY}
   - AI_SERVER=${AI_SERVER:-OPENAI}  # OPENAI 或 ZHIPU
   - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
-  - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+  - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4.5-air}
   - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
 ```
 
@@ -58,7 +58,7 @@ OPENAI_MODEL=gpt-4.1
 # 或使用智谱AI
 AI_SERVER=ZHIPU
 ZHIPU_AI_API_KEY=xxx.xxx
-ZHIPU_AI_MODEL=glm-4
+ZHIPU_AI_MODEL=glm-4.5-air
 ```
 
 ### 方法2：直接在docker-compose.yml中设置
@@ -67,7 +67,7 @@ ZHIPU_AI_MODEL=glm-4
 environment:
   - AI_SERVER=ZHIPU
   - ZHIPU_AI_API_KEY=your_zhipu_api_key
-  - ZHIPU_AI_MODEL=glm-4
+  - ZHIPU_AI_MODEL=glm-4.5-air
 ```
 
 ## 使用说明
@@ -78,7 +78,7 @@ environment:
    ```bash
    export AI_SERVER=ZHIPU
    export ZHIPU_AI_API_KEY=your_api_key
-   export ZHIPU_AI_MODEL=glm-4
+   export ZHIPU_AI_MODEL=glm-4.5-air
    ```
 
 2. **重启MAS服务：**

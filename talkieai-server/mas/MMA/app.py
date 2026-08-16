@@ -1,9 +1,10 @@
 import pandas as pd
 from pathlib import Path
 import sys
-import time, requests, json
-from fastapi import FastAPI, Request, Query
+import time, requests, json, threading
+from fastapi import BackgroundTasks, FastAPI, Request, Query
 from ai_helper import ask_ai, ask_ai_json
+from goal_titles import build_goal_title_map, normalize_goal_key, titles_for_goals
 from note_utils import (
     prepare_note_for_extraction,
     merge_semantic_items,
@@ -69,9 +70,14 @@ goal_tool_schema = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "List of weekly SMART goals"
+                    },
+                    "goal_titles": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "A 2-5 word action-focused title for each goal, in matching order"
                     }
                 },
-                "required": ["goals"]
+                "required": ["goals", "goal_titles"]
             }
         }
     }
@@ -133,7 +139,8 @@ def extract_weekly_goals(note_text: str) -> dict:
         "This is an NLU task, and not an NLG task! "    
         "Only include goals that are: Specific, Measurable, Achievable, Relevant, and Time-bound (SMART). "
         "Do not include vague or broad categories like 'Exercise', 'Medication', or 'Diet' unless they are written as specific SMART goals. "
-        "Ignore 6-month, long-term, or vague intentions. Focus only on short-term, concrete weekly SMART goals that the patient committed to."
+        "Ignore 6-month, long-term, or vague intentions. Focus only on short-term, concrete weekly SMART goals that the patient committed to. "
+        "For every goal, also create a matching 2-5 word English title in Title Case. Titles must be action-focused, not full sentences, and must not end with punctuation. "
         "Always respond in JSON format."
     )
     try:
@@ -142,7 +149,7 @@ def extract_weekly_goals(note_text: str) -> dict:
             # 智谱AI：直接要求JSON格式
             messages = [
                 {"role": "system", "content": GOAL_EXTRACTION_PROMPT + " Return ONLY valid JSON, no other text."},
-                {"role": "user", "content": f"Extract weekly SMART goals from the following:\n{note_text}\n\nReturn JSON format: {{\"goals\": []}}"}
+                {"role": "user", "content": f"Extract weekly SMART goals from the following:\n{note_text}\n\nReturn JSON format: {{\"goals\": [], \"goal_titles\": []}}"}
             ]
             result = ask_ai_json(messages)
             return result
@@ -288,6 +295,13 @@ async def extract(request: Request):
             merged = existing.union(new_goals)
 
             entry["output"]["goals"] = sorted({g.capitalize() for g in merged})
+            stored_titles = entry["output"].get("goal_titles")
+            if not isinstance(stored_titles, dict):
+                stored_titles = {}
+            stored_titles.update(
+                build_goal_title_map(goals, result.get("goal_titles", []))
+            )
+            entry["output"]["goal_titles"] = stored_titles
 
         time.sleep(1)
 
@@ -341,8 +355,60 @@ def get_notes(patient_id: str):
         return notes[patient_id]["output"]
     return {}
 
+_goal_title_jobs = set()
+_goal_title_jobs_lock = threading.Lock()
+
+
+def _summarize_goal_titles(goals):
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Create one concise English title for each health goal. Each title must be 2-5 words, "
+                "action-focused, in Title Case, not a sentence, and without ending punctuation. "
+                "Return only valid JSON."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps({"goals": goals, "return": {"goal_titles": []}}),
+        },
+    ]
+    result = ask_ai_json(messages, temperature=0.2)
+    return build_goal_title_map(goals, result.get("goal_titles", []))
+
+
+def _backfill_goal_titles(patient_id, goals):
+    try:
+        generated = _summarize_goal_titles(goals)
+        latest_goals = load_json(
+            SERVICE_NAME, "latest_smart_goals", {}, LATEST_WEEKLY_GOALS_FILE
+        )
+        latest = latest_goals.get(patient_id)
+        if not latest:
+            return
+        output = latest.setdefault("output", {})
+        stored = output.get("goal_titles")
+        if not isinstance(stored, dict):
+            stored = {}
+        stored.update(generated)
+        output["goal_titles"] = stored
+        save_json(
+            SERVICE_NAME,
+            "latest_smart_goals",
+            latest_goals,
+            LATEST_WEEKLY_GOALS_FILE,
+        )
+    except Exception as error:
+        print(f"Goal title backfill failed for {patient_id}: {error}", flush=True)
+    finally:
+        with _goal_title_jobs_lock:
+            _goal_title_jobs.discard(patient_id)
+
+
 @app.get("/patient_goals/{patient_id}")
-def get_goals(patient_id: str):
+def get_goals(patient_id: str, background_tasks: BackgroundTasks):
+    latest = None
     if memory_exists(SERVICE_NAME, "latest_smart_goals", LATEST_WEEKLY_GOALS_FILE):
         latest_goals = load_json(
             SERVICE_NAME, "latest_smart_goals", {}, LATEST_WEEKLY_GOALS_FILE
@@ -359,6 +425,18 @@ def get_goals(patient_id: str):
     else:
         recent_goals = []
 
+    title_map = latest.get("output", {}).get("goal_titles", {}) if latest else {}
+    if not isinstance(title_map, dict):
+        title_map = {}
+    missing_ai_titles = any(
+        normalize_goal_key(goal) not in title_map for goal in recent_goals
+    )
+    if recent_goals and missing_ai_titles:
+        with _goal_title_jobs_lock:
+            if patient_id not in _goal_title_jobs:
+                _goal_title_jobs.add(patient_id)
+                background_tasks.add_task(_backfill_goal_titles, patient_id, recent_goals)
+
     if not recent_goals:
         print(f"No SMART goals found for {patient_id}", flush=True)
 
@@ -369,7 +447,8 @@ def get_goals(patient_id: str):
     print(f"Sent SMART goals to GRA for patient {patient_id}", flush=True)
     return {
         "preferred_name": preferred_name,
-        "smart_goals": recent_goals
+        "smart_goals": recent_goals,
+        "smart_goal_titles": titles_for_goals(recent_goals, title_map),
     }
 
 

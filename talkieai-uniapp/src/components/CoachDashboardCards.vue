@@ -84,6 +84,10 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import {
+  nextWorkoutDetails,
+  nextWorkoutTitle,
+} from "@/components/coachDashboardPresentation.mjs";
 
 const props = withDefaults(
   defineProps<{
@@ -149,8 +153,7 @@ const weeklyLine = computed(() => {
 const nextWorkoutLine = computed(() => {
   if (props.loading) return "Loading…";
   const nw = props.dashboard?.next_workout;
-  if (!nw?.summary) return "No workout scheduled yet";
-  return nw.scheduled_display || "This week";
+  return nextWorkoutTitle(nw);
 });
 
 const nextWorkoutDesc = computed(() => {
@@ -159,16 +162,14 @@ const nextWorkoutDesc = computed(() => {
   if (!nw?.summary) {
     return "Add any goal or plan in chat — SMART format optional.";
   }
-  const dur = nw.duration_min ? `${nw.duration_min} min` : "";
-  const ty = nw.activity_type || "";
-  return [dur, ty].filter(Boolean).join(" · ") || nw.summary.slice(0, 80);
+  return nextWorkoutDetails(nw) || nw.summary.slice(0, 80);
 });
 
 const planName = computed(() => {
   if (props.loading) return "Loading…";
   const nw = props.dashboard?.next_workout;
   if (!nw?.summary) return "No plan yet";
-  return nw.summary.length > 40 ? nw.summary.slice(0, 40) + "…" : nw.summary;
+  return nextWorkoutTitle(nw);
 });
 
 const planDuration = computed(() => {

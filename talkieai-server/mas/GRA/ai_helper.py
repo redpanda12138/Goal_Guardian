@@ -9,7 +9,7 @@ from typing import Any, List, Dict, Optional
 AI_SERVER = os.getenv('AI_SERVER', 'ZHIPU')  # 默认使用智谱AI
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 ZHIPU_AI_API_KEY = os.getenv('ZHIPU_AI_API_KEY', '')
-ZHIPU_AI_MODEL = os.getenv('ZHIPU_AI_MODEL', 'glm-4')
+ZHIPU_AI_MODEL = os.getenv('ZHIPU_AI_MODEL', 'glm-4.5-air')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4.1')
 
 _openai_client = None
@@ -82,6 +82,7 @@ def ask_ai_message(
             "messages": _convert_zhipu_messages(messages),
             "temperature": temperature,
             "stream": False,
+            "thinking": {"type": "disabled"},
         }
     else:
         client = _get_openai_client()
@@ -171,7 +172,8 @@ def _ask_zhipu(messages: List[Dict[str, str]], temperature: float = 0.7) -> str:
         model=ZHIPU_AI_MODEL,
         messages=converted_messages,
         temperature=temperature,
-        stream=False
+        stream=False,
+        thinking={"type": "disabled"}
     )
     
     result = response.choices[0].message.content
