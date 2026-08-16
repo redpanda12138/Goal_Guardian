@@ -11,7 +11,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
-      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4.5-air}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
       - MAS_MEMORY_REQUIRE_DATABASE=true
     volumes:
@@ -33,7 +33,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
-      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4.5-air}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
       - MAS_MEMORY_REQUIRE_DATABASE=true
     volumes:
@@ -55,7 +55,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
-      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4.5-air}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
       - MAS_MEMORY_REQUIRE_DATABASE=true
       - MAS_RAG_ENABLED=${MAS_RAG_ENABLED:-false}
@@ -79,7 +79,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
-      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4.5-air}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
       - MAS_MEMORY_REQUIRE_DATABASE=true
     volumes:
@@ -101,7 +101,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - AI_SERVER=${AI_SERVER:-ZHIPU}
       - ZHIPU_AI_API_KEY=${ZHIPU_AI_API_KEY:-}
-      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4}
+      - ZHIPU_AI_MODEL=${ZHIPU_AI_MODEL:-glm-4.5-air}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
       - MAS_MEMORY_REQUIRE_DATABASE=true
     volumes:

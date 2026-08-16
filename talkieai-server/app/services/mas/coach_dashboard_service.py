@@ -366,11 +366,12 @@ def _infer_duration_min(goal: str) -> Optional[int]:
 
 
 def _next_workout_from_goals(
-    goals: List[str], done_indices: List[int]
+    goals: List[str], done_indices: List[int], goal_titles: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     if not goals:
         return {
             "summary": "",
+            "short_title": "",
             "activity_type": "",
             "duration_min": None,
             "intensity": "moderate",
@@ -388,6 +389,9 @@ def _next_workout_from_goals(
         next_index = 0
 
     goal = goals[next_index]
+    short_title = ""
+    if isinstance(goal_titles, list) and next_index < len(goal_titles):
+        short_title = str(goal_titles[next_index] or "").strip()
     activity = _infer_activity(goal)
     intensity = "moderate"
     if activity in ("run", "sport"):
@@ -397,6 +401,7 @@ def _next_workout_from_goals(
 
     return {
         "summary": goal[:200],
+        "short_title": short_title,
         "goal_index": next_index,
         "activity_type": activity,
         "duration_min": _infer_duration_min(goal),
@@ -457,7 +462,12 @@ class CoachDashboardService:
         today_done = len(_coerce_goal_indices(ledger.get("td", []), total))
         today_pending = max(0, total - today_done)
 
-        next_workout = _next_workout_from_goals(smart_goals, done_indices)
+        smart_goal_titles = goals_data.get("smart_goal_titles") or []
+        if not isinstance(smart_goal_titles, list):
+            smart_goal_titles = []
+        next_workout = _next_workout_from_goals(
+            smart_goals, done_indices, smart_goal_titles
+        )
         weekly_review = _build_weekly_review(ledger, total)
         overall_review = _build_overall_review(ledger, total, window)
         db.close()

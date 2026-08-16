@@ -131,6 +131,10 @@ def coach_module(monkeypatch):
                 "Walk 30 minutes three times this week",
                 "Stretch for 10 minutes every day",
             ],
+            "smart_goal_titles": [
+                "Weekly Walking Routine",
+                "Daily Stretching",
+            ],
         },
         ("oa", "/next_review_time/patient-acct-1", "GET"): {
             "next_review_time": "2026-04-24T09:00:00",
@@ -157,6 +161,16 @@ def test_build_dashboard_includes_review_sections(coach_module, db_session):
     assert "weekly_review" in dashboard
     assert "overall_review" in dashboard
     assert dashboard["overall_review"]["window"] == "5"
+
+
+def test_build_dashboard_exposes_ai_short_title_for_home_cards(
+    coach_module, db_session
+):
+    dashboard = asyncio.run(
+        coach_module.CoachDashboardService.build_dashboard(db_session, "acct-1")
+    )
+
+    assert dashboard["next_workout"]["short_title"] == "Weekly Walking Routine"
 
 
 def test_graph_dashboard_uses_a_validated_workflow_stage_projection(
