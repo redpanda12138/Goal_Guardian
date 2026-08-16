@@ -43,6 +43,7 @@
 import CommonHeader from "@/components/CommonHeader.vue";
 import { ref, computed } from "vue";
 import masRequest from "@/api/mas";
+import { markHomeRefreshNeeded } from "@/utils/pageRefreshState";
 
 const dateValue = ref("");
 const timeValue = ref("");
@@ -137,6 +138,7 @@ const submitSchedule = () => {
                 String(res?.code) === "200" ||
                 res?.status === "SUCCESS";
             if (ok) {
+                markHomeRefreshNeeded();
                 uni.showToast({ title: "Scheduled successfully", icon: "success" });
                 // 切回 Home tab，触发主页 onShow 重新拉取 next_review_time（否则留在「我的」页主页不会刷新）
                 setTimeout(() => {

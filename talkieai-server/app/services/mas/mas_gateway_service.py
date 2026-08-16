@@ -5,6 +5,14 @@ import httpx
 from typing import Dict, Any, Optional, Union
 from app.config import Config
 from app.core.logging import logging
+from app.services.mas.gateway_errors import (
+    MASGatewayError,
+    MASGatewayHTTPError,
+    MASGatewayTimeoutError,
+    MASGatewayTransportError,
+    MASGatewayUnexpectedError,
+    UnknownMASServiceError,
+)
 
 
 class MASGatewayService:
@@ -46,13 +54,15 @@ class MASGatewayService:
             响应数据字典
             
         Raises:
-            ValueError: 未知的服务名称
-            Exception: HTTP请求失败
+            UnknownMASServiceError: 未知的服务名称
+            MASGatewayError: HTTP请求失败
         """
         services = MASGatewayService._get_services()
         base_url = services.get(service_name.lower())
         if not base_url:
-            raise ValueError(f"Unknown MAS service: {service_name}")
+            raise UnknownMASServiceError(
+                service_name, endpoint, f"Unknown MAS service: {service_name}"
+            )
         
         url = f"{base_url}{endpoint}"
 
@@ -76,20 +86,36 @@ class MASGatewayService:
                 return response.json()
         except httpx.HTTPStatusError as e:
             logging.error(f"MAS service HTTP error: {service_name} {endpoint} - {e.response.status_code} - {e.response.text}")
-            raise Exception(f"MAS服务调用失败: HTTP {e.response.status_code}")
+            raise MASGatewayHTTPError(
+                service_name,
+                endpoint,
+                f"MAS服务调用失败: HTTP {e.response.status_code}",
+                status_code=e.response.status_code,
+                cause=e,
+            ) from e
         except httpx.TimeoutException as e:
             logging.error(
                 f"MAS service timeout: {service_name} {endpoint} read={read_sec}s - {e}"
             )
-            raise Exception(
-                f"MAS服务超时（>{read_sec:.0f}s），请检查 SOA/GRA/SCA 或大模型 API 是否正常"
-            )
+            raise MASGatewayTimeoutError(
+                service_name,
+                endpoint,
+                f"MAS服务超时（>{read_sec:.0f}s），请检查 SOA/GRA/SCA 或大模型 API 是否正常",
+                timeout_seconds=read_sec,
+                cause=e,
+            ) from e
         except httpx.RequestError as e:
             logging.error(f"MAS service request error: {service_name} {endpoint} - {e}")
-            raise Exception(f"MAS服务连接失败: {str(e)}")
+            raise MASGatewayTransportError(
+                service_name, endpoint, f"MAS服务连接失败: {str(e)}", cause=e
+            ) from e
+        except MASGatewayError:
+            raise
         except Exception as e:
             logging.error(f"MAS service call failed: {service_name} {endpoint} - {e}")
-            raise Exception(f"MAS服务调用失败: {str(e)}")
+            raise MASGatewayUnexpectedError(
+                service_name, endpoint, f"MAS服务调用失败: {str(e)}", cause=e
+            ) from e
     
     @staticmethod
     async def check_service_health(service_name: str) -> bool:
@@ -109,6 +135,9 @@ class MASGatewayService:
                 return False
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.get(f"{base_url}/health", timeout=5)
+                if response.status_code == 200:
+                    return True
+                response = await client.get(f"{base_url}/openapi.json", timeout=5)
                 return response.status_code == 200
         except:
             return False

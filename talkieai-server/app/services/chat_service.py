@@ -9,6 +9,7 @@ from app.models.account_models import *
 from app.models.chat_models import *
 from app.services.account_service import AccountService
 from app.services.topic_service import TopicService
+from app.services.mas.session_creation_policy import is_recent_session
 
 from app.ai.models import *
 from app.ai import chat_ai
@@ -107,8 +108,18 @@ class ChatService:
         """
         from app.services.mas.patient_mapping_service import PatientMappingService
         from app.services.mas.mas_gateway_service import MASGatewayService
+        from app.services.mas.pending_tool_confirmation import PendingToolConfirmationStore
         from app.core.logging import logging
         import asyncio
+
+        if PendingToolConfirmationStore(self.db).has_blocking_for_session(
+            session_id, account_id
+        ):
+            logging.info(
+                f"MAS sync: skip mirror while a tool confirmation is unresolved "
+                f"session={session_id}"
+            )
+            return
 
         try:
             loop = asyncio.get_event_loop()
@@ -244,22 +255,20 @@ class ChatService:
                 )
             )
             
-            # 从OA获取第一条消息（需要等待一下让SOA处理完成）
-            import time
-            time.sleep(1)  # 等待SOA处理
-            
-            # 获取对话历史中的第一条消息
-            history_data = loop.run_until_complete(
-                MASGatewayService.call_mas_service(
-                    "oa",
-                    f"/conversation_history/{patient_id}",
-                    method="GET"
+            greeting_message = str(result_data.get("assistant_message") or "").strip()
+            if not greeting_message:
+                # Compatibility fallback for an older SOA deployment that does not
+                # yet return the generated greeting in its trigger response.
+                history_data = loop.run_until_complete(
+                    MASGatewayService.call_mas_service(
+                        "oa",
+                        f"/conversation_history/{patient_id}",
+                        method="GET"
+                    )
                 )
-            )
-            
-            if history_data.get("status") == "ok" and history_data.get("chat_history"):
-                greeting_message = history_data["chat_history"][0].get("content", "Hello! How can I help you today?")
-            else:
+                if history_data.get("status") == "ok" and history_data.get("chat_history"):
+                    greeting_message = history_data["chat_history"][0].get("content", "")
+            if not greeting_message:
                 greeting_message = "Hello! I'm your health coach. How are you feeling today?"
             
             sequence = self.__get_message_sequence(session_id)
@@ -569,31 +578,6 @@ class ChatService:
         self.db.add(add_account_message)
         self.db.flush()  # 立即 flush，使后续 __get_message_sequence 能取到本条，避免助手消息拿到相同 sequence 导致排序错乱
         
-        # 先保存user消息到OA的goal_reviews.json，这样MMA可以从完整的对话历史中提取patient info和goals
-        try:
-            result = loop.run_until_complete(
-                MASGatewayService.call_mas_service(
-                    "oa",
-                    "/receive_user_message",
-                    data={
-                        "patient_id": patient_id,
-                        "user_input": send_message_content,
-                        "turn_index": current_turn_index
-                    }
-                )
-            )
-            from app.core.logging import logging
-            if result.get("status") == "ok":
-                logging.info(f"✅ Saved user message to OA for patient {patient_id}: {result}")
-            else:
-                logging.warning(f"⚠️ OA returned non-ok status: {result}")
-        except Exception as e:
-            from app.core.logging import logging
-            import traceback
-            logging.error(f"❌ Failed to save user message to OA: {e}")
-            logging.error(f"Traceback: {traceback.format_exc()}")
-            # 继续执行，不影响主流程
-        
         # 发送消息到MAS服务
         message_data = {
             "patient_id": patient_id,
@@ -601,47 +585,106 @@ class ChatService:
             "turn_index": current_turn_index
         }
         
-        # 根据turn_index判断应该发送到哪个代理
-        result_data = None
-        if current_turn_index <= 5:
-            # SOA阶段（turn_index 1-5）
+        # The seam is inert by default. Once enabled, OA's latched session mode is
+        # authoritative; an OA failure must not fall back and double-route.
+        from app.services.mas.oa_graph_seam import (
+            route_if_latched_graph,
+            stable_graph_request_id,
+        )
+        graph_result = loop.run_until_complete(
+            route_if_latched_graph(
+                MASGatewayService,
+                patient_id,
+                send_message_content,
+                current_turn_index,
+                stable_graph_request_id(account_id, session_id, str(send_message_id)),
+                account_id=account_id,
+            )
+        )
+
+        # Keep the established turn boundaries and SOA compatibility retry intact.
+        from app.services.mas.legacy_routing import (
+            select_legacy_mas_agent,
+            should_retry_soa_with_gra,
+        )
+
+        if graph_result is not None:
+            if graph_result.get("status") == "tool_requested":
+                from app.db import SessionLocal
+                from app.services.mas.tool_executor import MASToolExecutor
+                from app.services.mas.tool_handlers import build_account_tool_handlers
+                from app.services.mas.tool_workflow import (
+                    build_gra_continuation,
+                    handle_graph_model_message,
+                )
+
+                tool_db = SessionLocal()
+                try:
+                    graph_tool_turn = graph_result.get(
+                        "turn_index", current_turn_index + 1
+                    )
+                    executor = MASToolExecutor(
+                        build_account_tool_handlers(tool_db, account_id)
+                    )
+
+                    async def persist_confirmation(message):
+                        response = await MASGatewayService.call_mas_service(
+                            "oa",
+                            "/receive_message",
+                            data={
+                                "patient_id": patient_id,
+                                "turn_index": graph_tool_turn,
+                                "message": message,
+                            },
+                        )
+                        if not isinstance(response, dict) or response.get("status") != "ok":
+                            raise RuntimeError("OA rejected tool confirmation persistence")
+
+                    result_data = loop.run_until_complete(
+                        handle_graph_model_message(
+                            executor,
+                            graph_result.get("model_message"),
+                            continue_agent=build_gra_continuation(
+                                MASGatewayService,
+                                patient_id,
+                                graph_tool_turn,
+                            ),
+                            persist_confirmation=persist_confirmation,
+                        )
+                    )
+                    if result_data.get("tool_confirmation") is not None:
+                        result_data["tool_confirmation_turn_index"] = graph_tool_turn
+                finally:
+                    tool_db.close()
+                if graph_result.get("retrieval_results"):
+                    result_data["retrieval_results"] = graph_result[
+                        "retrieval_results"
+                    ]
+            else:
+                result_data = graph_result
+        else:
+            selected_agent = select_legacy_mas_agent(current_turn_index)
             result_data = loop.run_until_complete(
                 MASGatewayService.call_mas_service(
-                    "soa",
+                    selected_agent,
                     "/receive_message",
-                    data=message_data
+                    data=message_data,
                 )
             )
-            # 如果SOA返回错误（可能是因为turn_index >= 6），重试发送到GRA
-            if result_data and result_data.get("status") == "error" and "should be sent to GRA" in result_data.get("reason", ""):
+            if selected_agent == "soa" and should_retry_soa_with_gra(result_data):
                 print(f"SOA rejected turn_index {current_turn_index}, redirecting to GRA", flush=True)
                 result_data = loop.run_until_complete(
                     MASGatewayService.call_mas_service(
                         "gra",
                         "/receive_message",
-                        data=message_data
+                        data=message_data,
                     )
                 )
-        elif current_turn_index <= 13:
-            # GRA阶段（turn_index 6-13）
-            result_data = loop.run_until_complete(
-                MASGatewayService.call_mas_service(
-                    "gra",
-                    "/receive_message",
-                    data=message_data
-                )
-            )
-        else:
-            # SCA阶段
-            result_data = loop.run_until_complete(
-                MASGatewayService.call_mas_service(
-                    "sca",
-                    "/receive_message",
-                    data=message_data
-                )
-            )
         
         # 检查MAS服务返回的状态，如果返回"done"，会话已结束
+        if result_data and result_data.get("reason") == "OA persistence failed":
+            raise Exception("MAS OA persistence failed")
+
         if result_data and result_data.get("status") == "done":
             # 会话已结束，返回结束消息
             end_message = "This session has been completed. Thank you for participating in today's health coaching session. We'll see you next time!"
@@ -670,10 +713,62 @@ class ChatService:
                 "create_time": date_to_str(add_system_message.create_time),
                 "completed": True,
             }
-        
-        # 等待一下让MAS处理完成
-        import time
-        time.sleep(0.5)
+
+        # Normal agent turns already wait for the model and persist the reply to OA.
+        # Use that reply directly instead of issuing another status request followed
+        # by a full conversation-history request. Transition turns return an empty
+        # message and continue through the compatibility path below.
+        direct_assistant_message = (
+            str(result_data.get("assistant_message") or "").strip()
+            if result_data and result_data.get("persisted") is True
+            else ""
+        )
+        if direct_assistant_message:
+            sequence = self.__get_message_sequence(session_id)
+            add_system_message = self.__add_system_message(
+                session_id,
+                account_id,
+                direct_assistant_message,
+                "",
+                sequence + 1,
+            )
+            self.db.add(add_account_message)
+            self.db.add(add_system_message)
+            pending_confirmation = None
+            if result_data.get("tool_confirmation") is not None:
+                from app.models.mas_workflow_models import ToolRequest
+                from app.services.mas.pending_tool_confirmation import (
+                    PendingToolConfirmationStore,
+                )
+
+                pending_confirmation = PendingToolConfirmationStore(self.db).create(
+                    account_id=account_id,
+                    session_id=session_id,
+                    message_id=add_system_message.id,
+                    turn_index=result_data["tool_confirmation_turn_index"],
+                    request=ToolRequest.parse_obj(result_data["tool_confirmation"]),
+                )
+            self.db.commit()
+            self.db.flush()
+            self.__refresh_session_message_count(session_id)
+            response_payload = {
+                "data": direct_assistant_message,
+                "id": add_system_message.id,
+                "session_id": session_id,
+                "send_message_id": send_message_id,
+                "send_message_content": send_message_content,
+                "create_time": date_to_str(add_system_message.create_time),
+                "completed": False,
+            }
+            if pending_confirmation is not None:
+                response_payload["tool_confirmation"] = pending_confirmation
+            if result_data.get("tool_result") is not None:
+                response_payload["tool_result"] = result_data["tool_result"]
+            if result_data.get("retrieval_results"):
+                response_payload["retrieval_results"] = result_data[
+                    "retrieval_results"
+                ]
+            return response_payload
         
         # 再次检查会话状态，确保会话没有在MAS处理过程中结束
         try:
@@ -1113,6 +1208,22 @@ class ChatService:
         
         创建新会话时，会重置OA中该患者的会话计数（turn_index和chat_history）
         """
+        # 移动端重复点击或预约跳转与手动跳转重叠时，复用刚创建的会话。
+        # 这一步必须发生在 OA reset 之前，否则一次用户动作会把同一轮状态重置多次。
+        recent_session = (
+            self.db.query(MessageSessionEntity)
+            .filter_by(
+                account_id=account_id,
+                type="MAS",
+                completed=0,
+                deleted=0,
+            )
+            .order_by(MessageSessionEntity.create_time.desc())
+            .first()
+        )
+        if recent_session and is_recent_session(recent_session.create_time):
+            return self.__convert_session_model(recent_session)
+
         # 创建数据库会话
         session = self.create_session(account_id, session_type="MAS")
         
@@ -1467,7 +1578,7 @@ class ChatService:
     def initMessageResult(self, message: MessageEntity):
         st = message.style or ""
         message_kind = "state_event" if st.startswith("STATE_EVENT:") else "conversation"
-        return {
+        result = {
             "role": "ASSISTANT" if message.type == MessageType.SYSTEM.value else "USER",
             "content": message.content,
             "file_name": message.file_name,
@@ -1477,6 +1588,17 @@ class ChatService:
             "style": st,
             "message_kind": message_kind,
         }
+        if message.type == MessageType.SYSTEM.value:
+            from app.services.mas.pending_tool_confirmation import (
+                PendingToolConfirmationStore,
+            )
+
+            confirmation = PendingToolConfirmationStore(self.db).get_for_message(
+                message.id, message.account_id
+            )
+            if confirmation is not None:
+                result["tool_confirmation"] = confirmation
+        return result
 
     def __convert_session_model(self, session: MessageSessionEntity):
         return {

@@ -1,8 +1,8 @@
 {
-    "name" : "talkie",
-    "appid" : "__UNI__1EE8DB0",
+    "name" : "Goal Guardian",
+    "appid" : "__UNI__C9F8B0E",
     "description" : "",
-    "versionName" : "1.0.0",
+    "versionName" : "1.0.1",
     "versionCode" : "100",
     "transformPx" : false,
     /* 5+App特有相关 */
@@ -48,7 +48,7 @@
                     "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>",
                     "",
                     "<!-- 3. Android 13+ 单独的录音权限（兼容新版本） -->",
-                    "<uses-permission android:name=\"android.permission.RECORD_AUDIO\" android:maxSdkVersion=\"33\"/>",
+                    "<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>",
                     "<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/> <!-- Android 13+ 通知权限，部分机型录音需要 -->"
                 ],
                 "minSdkVersion" : 21

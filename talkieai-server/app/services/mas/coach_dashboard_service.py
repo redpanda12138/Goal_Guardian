@@ -17,6 +17,29 @@ from app.services.mas.patient_mapping_service import PatientMappingService
 
 LEDGER_KEY_PREFIX = "mas_coach_ledger_"
 WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+WORKFLOW_PHASES = {"opening", "review_decision", "closing", "summary"}
+WORKFLOW_STAGES = WORKFLOW_PHASES | {"waiting_user"}
+
+
+def _project_session_status(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("workflow_mode") != "graph_v1":
+        return payload
+    valid = (
+        payload.get("workflow_version") == "oa_graph_v1"
+        and type(payload.get("session_generation")) is int
+        and payload["session_generation"] >= 1
+        and payload.get("workflow_phase") in WORKFLOW_PHASES
+        and payload.get("workflow_stage") in WORKFLOW_STAGES
+    )
+    if not valid:
+        return {
+            "status": "error",
+            "workflow_mode": "graph_v1",
+            "reason": "invalid_workflow_projection",
+        }
+    return {**payload, "stage_source": "workflow_state"}
 
 
 def _week_id() -> str:
@@ -392,6 +415,7 @@ class CoachDashboardService:
         window = _normalize_window(window)
         mapping = PatientMappingService(db)
         patient_id = mapping.get_or_create_patient_id(account_id)
+        db.close()
 
         goals_data: Dict[str, Any] = {}
         try:
@@ -436,6 +460,7 @@ class CoachDashboardService:
         next_workout = _next_workout_from_goals(smart_goals, done_indices)
         weekly_review = _build_weekly_review(ledger, total)
         overall_review = _build_overall_review(ledger, total, window)
+        db.close()
 
         next_review_payload: Dict[str, Any] = {}
         try:
@@ -452,6 +477,7 @@ class CoachDashboardService:
             )
         except Exception:
             session_payload = {}
+        session_payload = _project_session_status(session_payload)
 
         return {
             "patient_id": patient_id,
@@ -485,9 +511,9 @@ class CoachDashboardService:
         goal_index: Optional[int] = None,
         note: Optional[str] = None,
     ) -> Dict[str, Any]:
-        ledger = _load_ledger(db, account_id)
         mapping = PatientMappingService(db)
         patient_id = mapping.get_or_create_patient_id(account_id)
+        db.close()
 
         goals_data: Dict[str, Any] = {}
         try:
@@ -499,6 +525,7 @@ class CoachDashboardService:
 
         smart_goals = goals_data.get("smart_goals") or []
         total = len(smart_goals) if isinstance(smart_goals, list) else 0
+        ledger = _load_ledger(db, account_id)
 
         if event_type not in {"goal_completed", "goal_skipped", "progress_refreshed"}:
             return {

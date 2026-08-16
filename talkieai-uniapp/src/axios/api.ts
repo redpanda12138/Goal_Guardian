@@ -1,4 +1,5 @@
 import __config from "@/config/env";
+import { requestTimeoutFor } from "@/utils/chatRequestPolicy.mjs";
 
 const request = (
   url: string,
@@ -23,7 +24,7 @@ const request = (
       url: _url,
       method: method,
       data: data,
-      timeout: 30000,
+      timeout: requestTimeoutFor(url),
       header: {
         "Content-Type": "application/json",
         "X-Token": uni.getStorageSync("x-token")

@@ -34,13 +34,16 @@
         <view class="message-content-item">
           <message-content :auto-hint="messages.auto_text_shadow" :auto-play="accountSetting.auto_playing_voice"
             :auto-pronunciation="accountSetting.auto_pronunciation" :message="message"
+            @confirm-tool="onToolConfirm(message)"
+            @cancel-tool="onToolCancel(message)"
+            @refresh-tool="onToolRefresh"
             ref="messageListRef"></message-content>
         </view>
       </template>
     </view>
 
     <!-- 底部操作栏：历史查看模式下不显示 -->
-    <view class="chat-bottom-container" v-if="!isMasSessionCompleted && !isHistoryView">
+    <view class="chat-bottom-container" v-if="!isMasSessionCompleted && !isHistoryView && !hasBlockingToolConfirmation">
       <!-- 键盘输入 -->
       <view v-if="!inputTypeVoice" class="input-bottom-container" :style="'bottom:' + inputBottom + 'px;'">
         <view @tap="handleSwitchInputType" class="voice-icon-box">
@@ -170,14 +173,35 @@ import MessageContent from "./components/MessageContent.vue";
 import Prompt from "./components/Prompt.vue";
 import Speech from "./components/MessageSpeech.vue";
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, getCurrentInstance } from "vue";
-import { onLoad, onShow } from "@dcloudio/uni-app";
+import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
 import chatRequest from "@/api/chat";
 import masRequest from "@/api/mas";
 import accountRequest from "@/api/account";
 import topicRequest from "@/api/topic";
 import utils from "@/utils/utils";
+import { markHomeRefreshNeeded } from "@/utils/pageRefreshState";
+import {
+  createActionGate,
+  isRequestTimeoutError,
+} from "@/utils/chatRequestPolicy.mjs";
 import audioPlayer from "@/components/audioPlayerExecuter";
-import type { Message, MessagePage, Session, AccountSettings } from "@/models/models";
+import type {
+  AccountSettings,
+  Message,
+  MessagePage,
+  Session,
+  ToolExecutionResult,
+} from "@/models/models";
+import {
+  blocksConversation,
+  cancellationPayload,
+  confirmationPayload,
+  createToolConfirmationState,
+  markConfirmationCancelling,
+  markConfirmationSubmitting,
+  resolveCancellation,
+  resolveToolExecution,
+} from "@/pages/chat/toolConfirmationState.mjs";
 
 const session = ref<Session>({
   id: undefined,
@@ -185,6 +209,8 @@ const session = ref<Session>({
   messages: { total: 0, list: [] } as MessagePage,
 });
 const messages = ref<Message[]>([]);
+const messageSendGate = createActionGate();
+const newSessionGate = createActionGate();
 const inputTypeVoice = ref(true);
 const inputText = ref("");
 /** 当前待发送的录音文件名（录音完成后保留；删除/发送后清空） */
@@ -217,6 +243,14 @@ const accountSetting = ref<AccountSettings>({
 const isMasSessionCompleted = ref(false);
 const coachDashboard = ref<Record<string, any> | null>(null);
 const coachDashboardLoading = ref(false);
+const MAS_META_REFRESH_COOLDOWN_MS = 1500;
+let lastMasMetaRefreshAt = 0;
+
+onUnload(() => {
+  if (session.value.type === "MAS") {
+    markHomeRefreshNeeded();
+  }
+});
 
 // 历史查看模式：从侧栏进入的只读对话，不显示输入栏与 New Session
 const isHistoryView = ref(false);
@@ -245,6 +279,10 @@ const inputHasText = computed(() => {
   return !!(inputText.value && inputText.value.trim());
 });
 
+const hasBlockingToolConfirmation = computed(() =>
+  messages.value.some((message) => blocksConversation(message.tool_confirmation)),
+);
+
 const sendMessageHandler = (info: any) => {
   if (info.text) {
     sendMessage(info.text, info.fileName);
@@ -269,8 +307,7 @@ onLoad((option: any) => {
   // 计算header高度，用于定位New Session按钮
   const instance = getCurrentInstance();
   const CustomBar = instance?.appContext.config.globalProperties.CustomBar || 88;
-  const StatusBar = instance?.appContext.config.globalProperties.StatusBar || 0;
-  headerTop.value = CustomBar + StatusBar;
+  headerTop.value = CustomBar;
   
   console.log('Onload')
   $bus.on("SendMessage", sendMessageHandler);
@@ -291,8 +328,7 @@ onShow(() => {
   
   // 如果是MAS会话，检查会话状态
   if (session.value.type === 'MAS' && session.value.id) {
-    checkMasSessionStatus();
-    loadCoachDashboard();
+    refreshMasSessionMeta();
   }
 });
 
@@ -312,6 +348,19 @@ const loadCoachDashboard = () => {
     .finally(() => {
       coachDashboardLoading.value = false;
     });
+};
+
+const refreshMasSessionMeta = (force = false) => {
+  if (session.value.type !== "MAS" || isHistoryView.value || !session.value.id) {
+    return;
+  }
+  const now = Date.now();
+  if (!force && now - lastMasMetaRefreshAt < MAS_META_REFRESH_COOLDOWN_MS) {
+    return;
+  }
+  lastMasMetaRefreshAt = now;
+  checkMasSessionStatus();
+  loadCoachDashboard();
 };
 
 const onCoachMarkComplete = (goalIndex: number) => {
@@ -343,6 +392,82 @@ const onCoachModify = () => {
 
 const onCoachNextTap = () => {
   uni.switchTab({ url: "/pages/practice/index" });
+};
+
+const appendToolContinuation = (content: string) => {
+  if (!content) return;
+  messages.value.push({
+    id: `tool_${Date.now()}`,
+    session_id: session.value.id,
+    content,
+    owner: false,
+    role: "ASSISTANT",
+    file_name: null,
+    message_kind: "tool_result",
+    actions_enabled: false,
+    auto_hint: false,
+    auto_play: false,
+    auto_pronunciation: false,
+  });
+  nextTick(() => scrollToBottom());
+};
+
+const onToolConfirm = (message: Message) => {
+  const pending = message.tool_confirmation;
+  if (!pending || pending.status !== "pending") return;
+
+  const payload = confirmationPayload(pending);
+  message.tool_confirmation = markConfirmationSubmitting(pending);
+  masRequest
+    .executeWorkflowTool(payload)
+    .then((response: any) => {
+      const current = message.tool_confirmation;
+      if (!current || current.status !== "submitting") return;
+      const resolved = resolveToolExecution(
+        current,
+        response?.data as ToolExecutionResult,
+      );
+      message.tool_confirmation = resolved.state;
+      appendToolContinuation(resolved.assistantMessage);
+      refreshMasSessionMeta(true);
+    })
+    .catch((error: unknown) => {
+      const current = message.tool_confirmation;
+      if (!current || current.status !== "submitting") return;
+      message.tool_confirmation = resolveToolExecution(
+        current,
+        null,
+        error,
+      ).state;
+      console.error("Tool confirmation result is indeterminate", error);
+    });
+};
+
+const onToolCancel = (message: Message) => {
+  const pending = message.tool_confirmation;
+  if (!pending || pending.status !== "pending") return;
+  const cancelling = markConfirmationCancelling(pending);
+  message.tool_confirmation = cancelling;
+  masRequest
+    .executeWorkflowTool(cancellationPayload(cancelling))
+    .then((response: any) => {
+      const current = message.tool_confirmation;
+      if (!current || current.status !== "cancelling") return;
+      message.tool_confirmation = resolveCancellation(current, response?.data);
+      uni.showToast({ title: "No change was made", icon: "none" });
+    })
+    .catch((error: unknown) => {
+      const current = message.tool_confirmation;
+      if (!current || current.status !== "cancelling") return;
+      message.tool_confirmation = resolveCancellation(current, null, error);
+      console.error("Tool cancellation result is indeterminate", error);
+    });
+};
+
+const onToolRefresh = () => {
+  if (session.value.id) {
+    initData(session.value.id);
+  }
 };
 
 /** 根据内容计算输入框高度（1～6 行），删除文字时能缩回一行 */
@@ -533,6 +658,13 @@ const sendSpeech = (fileName: string) => {
  * @param fileName 如果是语音发送, 则传入文件名
  */
 const sendMessage = (message?: string, fileName?: string) => {
+  if (!messageSendGate.enter()) {
+    uni.showToast({
+      title: "Your previous message is still being processed",
+      icon: "none",
+    });
+    return;
+  }
   console.log('send file name');
   const ownertTimestamp = new Date().getTime();
   const ownMessage: any = {
@@ -584,6 +716,10 @@ const sendMessage = (message?: string, fileName?: string) => {
         ...aiMessage,
         id: data.id,
         content: data.data,
+        tool_confirmation:
+          data.tool_confirmation
+            ? createToolConfirmationState(data.tool_confirmation)
+            : null,
         auto_hint: accountSetting.value.auto_text_shadow == 1,
         auto_play: accountSetting.value.auto_playing_voice == 1,
       });
@@ -599,9 +735,8 @@ const sendMessage = (message?: string, fileName?: string) => {
           isMasSessionCompleted.value = true;
         } else {
           // 即使没有completed标志，也检查一下状态
-          checkMasSessionStatus();
+          refreshMasSessionMeta(true);
         }
-        loadCoachDashboard();
       }
       // 录音识别发送成功后删除服务器上的录音文件
       if (fileName) {
@@ -609,14 +744,21 @@ const sendMessage = (message?: string, fileName?: string) => {
       }
     })
     .catch((e) => {
-      // 为用户提示错误show toast
+      const timedOut = isRequestTimeoutError(e);
       uni.showToast({
-        title: 'fail to send..',
+        title: timedOut
+          ? "The reply is still processing. Reopen this chat shortly."
+          : "Failed to send message",
         icon: "none",
       });
       console.error(e);
-      messages.value.pop();
-      messages.value.pop();
+      messages.value = messages.value.filter((item) => {
+        const id = item.id as any;
+        return id !== timestamp && (timedOut || id !== ownertTimestamp);
+      });
+    })
+    .finally(() => {
+      messageSendGate.leave();
     });
 };
 
@@ -676,6 +818,7 @@ const initData = (sessionId: string) => {
         nextTick(() => {
           scrollToBottom();
         });
+        refreshMasSessionMeta(true);
       })
       return;
     }
@@ -690,6 +833,9 @@ const initData = (sessionId: string) => {
         file_name: item.file_name,
         style: (item as any).style,
         message_kind: (item as any).message_kind,
+        tool_confirmation: (item as any).tool_confirmation
+          ? createToolConfirmationState((item as any).tool_confirmation)
+          : null,
         auto_hint: false,
         auto_play: false,
         auto_pronunciation: false,
@@ -701,8 +847,7 @@ const initData = (sessionId: string) => {
     // 如果是MAS会话，检查会话状态
     if (session.value.type === 'MAS') {
       console.log("MAS session detected, checking status...");
-      checkMasSessionStatus();
-      loadCoachDashboard();
+      refreshMasSessionMeta();
     } else {
       console.log("Session type:", session.value.type, "- not MAS, skipping status check");
     }
@@ -914,6 +1059,13 @@ const selectHistorySession = (item: { id: string }) => {
  * 开始新会话
  */
 const handleStartNewSession = () => {
+  if (!newSessionGate.enter()) {
+    uni.showToast({
+      title: "A new session is already being created",
+      icon: "none",
+    });
+    return;
+  }
   chatRequest.sessionMasCreate().then((data) => {
     console.log("New MAS session:", data);
     if (data && data.data && data.data.id) {
@@ -937,6 +1089,8 @@ const handleStartNewSession = () => {
       icon: "none",
       duration: 3000,
     });
+  }).finally(() => {
+    newSessionGate.leave();
   });
 };
 
@@ -1030,7 +1184,7 @@ const scrollToBottom = () => {
   padding-top: 80rpx;
 
   &.chat-container--mas {
-    padding-top: 140rpx;
+    padding-top: 170rpx;
   }
 
   .mas-coach-dash {
@@ -1295,15 +1449,16 @@ const scrollToBottom = () => {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 10rpx 32rpx;
+  min-height: 96rpx;
+  padding: 14rpx 32rpx;
   background-color: rgba(250, 246, 255, 0.96);
   border-bottom: 1rpx solid rgba(124, 92, 191, 0.12);
   box-sizing: border-box;
   width: 100%;
   
   .action-btn-box {
-    min-height: 40rpx;
-    padding: 10rpx 28rpx;
+    min-height: 56rpx;
+    padding: 0 32rpx;
     display: flex;
     justify-content: center;
     align-items: center;

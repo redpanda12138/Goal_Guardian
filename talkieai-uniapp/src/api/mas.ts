@@ -24,6 +24,12 @@ export default {
   }) => {
     return request("/mas/coach/goals/state-event", "POST", data, false);
   },
+  executeWorkflowTool: (data: {
+    action_id: string;
+    confirmed: boolean;
+  }) => {
+    return request("/mas/workflow/tools/execute", "POST", data, false);
+  },
 
   // 会话管理
   triggerSession: (data?: any) => {

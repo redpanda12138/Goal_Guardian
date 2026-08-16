@@ -79,6 +79,8 @@ class ProductionContainerConfigTest(unittest.TestCase):
             "MAS_MEMORY_REQUIRE_DATABASE=true",
             "TEMP_SAVE_FILE_PATH=/app/files",
             "WHISPER_MODEL_PATH=/models/whisper",
+            "WHISPER_MODEL_HOST_PATH=./talkieai-server/mas/whisper-model-offline",
+            "WHISPER_MODEL_PROFILE=small-sing2eng",
             "PYTORCH_GPU_INDEX_URL=",
             "PYTORCH_GPU_VERSION=2.11.0",
             "PYTORCH_GPU_WHEEL_SUFFIX=",
@@ -111,6 +113,7 @@ class ProductionContainerConfigTest(unittest.TestCase):
             self.service_block(compose, "oa"),
         )
         self.assertIn("backend-files:/app/files", compose)
+        self.assertIn("source: ${WHISPER_MODEL_HOST_PATH:-./talkieai-server/mas/whisper-model-offline}", compose)
         self.assertIn("target: /models/whisper", compose)
         self.assertIn("read_only: true", compose)
 

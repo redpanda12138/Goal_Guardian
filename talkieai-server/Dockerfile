@@ -3,15 +3,25 @@ FROM python:3.10-slim
 ARG PYTORCH_VERSION=2.11.0
 ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 ARG PYTORCH_WHEEL_SUFFIX=+cpu
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_DEFAULT_TIMEOUT=120
 
 WORKDIR /app
 
-RUN apt-get update \
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i \
+            -e 's|http://deb.debian.org/debian-security|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g' \
+            -e 's|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
         libgomp1 \

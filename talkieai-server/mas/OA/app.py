@@ -15,11 +15,13 @@ for common_dir in (
 
 from mas_memory_store import load_json, save_json, memory_exists
 from runtime_config import orchestration_enabled
+from workflow_phase2 import reserve_graph_dispatch, reset_active_sessions, reset_patient_session, session_identity, shadow_route_comparison, transition_dispatch, workflow_projection
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/extract"
 AGENT_URL = "http://{agent}:8000/trigger"
 SERVICE_NAME = "oa"
+AGENT_TRANSITION_TIMEOUT_SECONDS = int(os.getenv("MAS_AGENT_TRANSITION_TIMEOUT_SECONDS", "90"))
 
 SESSION_NOTES_FILE = Path("memory/session_notes_mock.json")
 REVIEW_SCHEDULE_FILE = Path("memory/review_schedule.json")
@@ -78,6 +80,7 @@ def save_message(new_record):
     records = load_goal_reviews()
 
     updated = False
+    overflow_patient_id = None
     for record in records:
         if record.get("patient_id") == new_record.get("patient_id"):
             if "chat_history" in new_record:
@@ -108,8 +111,8 @@ def save_message(new_record):
                 # 如果超过15，自动重置（防止历史累积）
                 if assistant_count > 15:
                     print(f"⚠️ Warning: turn_index ({assistant_count}) exceeds 15 for patient {record.get('patient_id')}. Auto-resetting in save_message.", flush=True)
-                    record["turn_index"] = 0
-                    record["chat_history"] = []
+                    overflow_patient_id = record.get("patient_id")
+                    break
                 else:
                     record["turn_index"] = assistant_count
             
@@ -126,6 +129,13 @@ def save_message(new_record):
             
             updated = True
             break
+
+    if overflow_patient_id:
+        # Discard this stale snapshot. The atomic helper reloads latest state,
+        # advances generation, clears reservations, and persists under the same
+        # lock used by graph ingress.
+        reset_patient_session(load_goal_reviews, save_goal_reviews, overflow_patient_id)
+        return
 
     if not updated:
         # 对于新记录，也计算turn_index
@@ -171,7 +181,11 @@ def trigger_agent_sync(patient_id: str, turn_index: int, agent_to_trigger: str) 
 
     try:
         # 关键：给外部服务调用加 timeout，避免 OA 在某次触发中卡死
-        response = requests.post(url, json=payload, timeout=(3, 25))
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=(3, AGENT_TRANSITION_TIMEOUT_SECONDS),
+        )
         response.raise_for_status()
         try:
             body = response.json()
@@ -192,22 +206,52 @@ def trigger_agent_sync(patient_id: str, turn_index: int, agent_to_trigger: str) 
         print(f"Failed to trigger {agent_to_trigger}: {e}", flush=True)
         return {"status": "error", "reason": str(e)}
 
+
+def normalize_graph_agent_response(body: dict) -> dict:
+    if not isinstance(body, dict):
+        raise RuntimeError("selected Agent returned a non-object response")
+
+    raw_status = body.get("status")
+    status = str(raw_status or "").strip().lower()
+    if status in {"error", "failed"}:
+        reason = body.get("reason") or body.get("message") or "selected Agent failed"
+        raise RuntimeError(reason)
+    if status in {"ok", "completed", "tool_requested"}:
+        return body
+    if status in {
+        "message processed",
+        "message_processed",
+        "soa triggered",
+        "gra triggered",
+        "sca triggered",
+    }:
+        return {
+            **body,
+            "status": "ok",
+            "legacy_status": raw_status,
+        }
+    raise RuntimeError(f"unsupported Agent response status: {raw_status}")
+
+
+def dispatch_graph_user_message_sync(patient_id: str, turn_index: int, agent_to_trigger: str, user_input: str) -> dict:
+    url = AGENT_URL.format(agent=agent_to_trigger.lower()).replace("/trigger", "/receive_message")
+    response = requests.post(url, json={
+        "patient_id": patient_id,
+        "turn_index": turn_index,
+        "user_input": user_input,
+        "workflow_mode": "graph_v1",
+    }, timeout=(3, 120))
+    response.raise_for_status()
+    body = response.json()
+    return normalize_graph_agent_response(body)
+
 def reset_patient_session_state(patient_id: str) -> None:
     """
     清空 OA 中该患者在 goal_reviews 里的会话状态。
     定时预约再次触发 SOA 时，若开场白与上一轮最后一条 assistant 相同，
     receive_message 会去重跳过，导致用户看不到“新回合”——故调度触发前必须先重置。
     """
-    records = load_goal_reviews()
-    patient_entry = next((r for r in records if r.get("patient_id") == patient_id), None)
-    if not patient_entry:
-        records.append(
-            {"patient_id": patient_id, "turn_index": 0, "chat_history": []}
-        )
-    else:
-        patient_entry["turn_index"] = 0
-        patient_entry["chat_history"] = []
-    save_goal_reviews(records)
+    reset_patient_session(load_goal_reviews, save_goal_reviews, patient_id)
     print(
         f"🗓️ Reset OA session state for {patient_id} before scheduled SOA trigger",
         flush=True,
@@ -316,18 +360,9 @@ def orchestration_loop():
                 if now_slot.hour == 2 and now_slot.minute == 0 and last_reset_date != now_slot.date():
                     print(f"[{now_slot}] Auto-resetting all session counts...", flush=True)
                     try:
-                        records = load_goal_reviews()
-                        reset_count = 0
-                        
-                        for patient_entry in records:
-                            if patient_entry.get("turn_index", 0) > 0 or len(patient_entry.get("chat_history", [])) > 0:
-                                patient_entry["turn_index"] = 0
-                                patient_entry["chat_history"] = []
-                                reset_count += 1
+                        reset_count = reset_active_sessions(load_goal_reviews, save_goal_reviews)
                         
                         if reset_count > 0:
-                            save_goal_reviews(records)
-                            
                             print(f"[{now_slot}] Auto-reset completed: {reset_count} sessions reset", flush=True)
                         else:
                             print(f"[{now_slot}] No sessions to reset", flush=True)
@@ -513,12 +548,133 @@ async def trigger_agent(request: Request):
 
     if not patient_id:
         return {"status": "error", "reason": "Missing patient_id"}
+    record = next((item for item in load_goal_reviews() if item.get("patient_id") == patient_id), {})
+    if session_identity(record)["workflow_mode"] == "graph_v1":
+        generation = data.get("session_generation")
+        request_id = data.get("request_id")
+        if type(generation) is not int or not request_id:
+            return {"status": "error", "reason": "Missing graph session_generation or request_id"}
+        try:
+            decision, reservation_status = reserve_graph_dispatch(
+                load_goal_reviews, save_goal_reviews, patient_id, generation, request_id, turn_index,
+                event_type="agent_transition_intent", requested_agent=agent_to_trigger,
+            )
+        except ValueError as error:
+            return {"status": "error", "reason": str(error)}
+        if reservation_status == "conflict":
+            return {"status": "error", "reason": decision.route_reason}
+        if reservation_status == "completed":
+            return {"status": "ok", "message": "duplicate_ignored", "reservation_status": reservation_status}
+        if reservation_status in {"dispatching", "indeterminate"}:
+            return {"status": "error", "reason": f"dispatch_{reservation_status}"}
+        claimed, current = transition_dispatch(load_goal_reviews, save_goal_reviews, patient_id, request_id, "reserved", "dispatching")
+        if not claimed:
+            return {"status": "error", "reason": f"dispatch_{current}"}
+        try:
+            result = await asyncio.to_thread(
+                trigger_agent_sync,
+                patient_id,
+                turn_index,
+                decision.selected_agent,
+            )
+            if result.get("status") != "ok":
+                raise RuntimeError(result.get("reason") or "Agent trigger failed")
+        except Exception as error:
+            transition_dispatch(load_goal_reviews, save_goal_reviews, patient_id, request_id, "dispatching", "indeterminate")
+            return {"status": "error", "reason": "dispatch_indeterminate", "detail": str(error)}
+        transition_dispatch(load_goal_reviews, save_goal_reviews, patient_id, request_id, "dispatching", "completed")
+        return {**result, "selected_agent": decision.selected_agent, "request_id": request_id}
     if not turn_index:
         return {"status": "error", "reason": "Missing turn_index"}
     if not agent_to_trigger:
         return {"status": "error", "reason": "Missing agent_to_trigger"}
 
-    return trigger_agent_sync(patient_id, turn_index, agent_to_trigger)
+    return await asyncio.to_thread(
+        trigger_agent_sync,
+        patient_id,
+        turn_index,
+        agent_to_trigger,
+    )
+
+
+@app.get("/workflow_mode/{patient_id}")
+async def workflow_mode(patient_id: str):
+    record = next((item for item in load_goal_reviews() if item.get("patient_id") == patient_id), {})
+    return {
+        "status": "ok",
+        "patient_id": patient_id,
+        **session_identity(record),
+        **workflow_projection(record),
+    }
+
+
+@app.post("/graph_v1/user_turn")
+async def graph_v1_user_turn(request: Request):
+    data = await request.json()
+    patient_id = data.get("patient_id")
+    generation = data.get("session_generation")
+    request_id = data.get("request_id")
+    turn_index = data.get("turn_index")
+    user_input = data.get("user_input")
+    if not patient_id or type(generation) is not int or not request_id or type(turn_index) is not int or type(user_input) is not str or not user_input:
+        return {"status": "error", "reason": "Missing graph ingress identity"}
+    try:
+        decision, reservation_status = reserve_graph_dispatch(
+            load_goal_reviews, save_goal_reviews, patient_id, generation, request_id, turn_index,
+            user_input=user_input,
+        )
+    except ValueError as error:
+        return {"status": "error", "reason": str(error)}
+    if reservation_status == "session_completed":
+        return {"status": "completed", "selected_agent": None}
+    if reservation_status == "conflict":
+        return {"status": "error", "reason": decision.route_reason}
+    if reservation_status == "completed":
+        return {"status": "ok", "message": "duplicate_ignored", "reservation_status": reservation_status}
+    if reservation_status in {"dispatching", "indeterminate"}:
+        return {"status": "error", "reason": f"dispatch_{reservation_status}"}
+    claimed, current = transition_dispatch(load_goal_reviews, save_goal_reviews, patient_id, request_id, "reserved", "dispatching")
+    if not claimed:
+        return {"status": "error", "reason": f"dispatch_{current}"}
+    try:
+        result = dispatch_graph_user_message_sync(patient_id, turn_index, decision.selected_agent, user_input)
+    except Exception as error:
+        # Without an idempotency contract from downstream Agents, a transport
+        # failure is ambiguous. Preserve at-most-once by recording indeterminate
+        # and fail closed instead of retrying or claiming duplicate success.
+        transition_dispatch(load_goal_reviews, save_goal_reviews, patient_id, request_id, "dispatching", "indeterminate")
+        return {"status": "error", "reason": "dispatch_indeterminate", "detail": str(error)}
+    transition_dispatch(load_goal_reviews, save_goal_reviews, patient_id, request_id, "dispatching", "completed")
+    updated = next(
+        (item for item in load_goal_reviews() if item.get("patient_id") == patient_id),
+        {},
+    )
+    return {
+        **result,
+        "selected_agent": decision.selected_agent,
+        "request_id": request_id,
+        **workflow_projection(updated),
+    }
+
+
+@app.post("/graph_v1/shadow_decision")
+async def graph_v1_shadow_decision(request: Request):
+    """Compare pure route decisions without reading or mutating OA state."""
+    data = await request.json()
+    patient_id = data.get("patient_id")
+    request_id = data.get("request_id")
+    turn_index = data.get("turn_index")
+    session_status = data.get("session_status", "active")
+    if (
+        not patient_id
+        or not request_id
+        or type(turn_index) is not int
+        or session_status not in {"active", "completed"}
+    ):
+        return {"status": "error", "reason": "invalid_shadow_input"}
+    return shadow_route_comparison(
+        patient_id, request_id, turn_index, session_status
+    )
 
 @app.get("/next_review_time/{patient_id}")
 async def next_review_time(patient_id: str):
@@ -596,13 +752,13 @@ async def get_session_status(patient_id: str):
         print(f"⚠️ Warning: turn_index ({turn_index}) exceeds 15 for patient {patient_id}. Auto-resetting session.", flush=True)
         old_turn_index = turn_index
         old_history_len = chat_history_len
-        patient_entry["turn_index"] = 0
-        patient_entry["chat_history"] = []
         try:
-            save_goal_reviews(records)
+            reset_patient_session(load_goal_reviews, save_goal_reviews, patient_id)
+            records = load_goal_reviews()
+            patient_entry = next(r for r in records if r.get("patient_id") == patient_id)
             print(f"✅ Auto-reset completed: patient {patient_id} turn_index {old_turn_index} -> 0, chat_history {old_history_len} -> 0", flush=True)
-            turn_index = 0
-            chat_history_len = 0
+            turn_index = patient_entry.get("turn_index", 0)
+            chat_history_len = len(patient_entry.get("chat_history", []))
         except Exception as e:
             print(f"❌ Failed to auto-reset: {e}", flush=True)
     
@@ -621,6 +777,14 @@ async def get_session_status(patient_id: str):
     # 计算user和assistant消息的数量，用于调试
     user_count = sum(1 for msg in patient_entry.get("chat_history", []) if msg.get("role") == "user")
     assistant_count = sum(1 for msg in patient_entry.get("chat_history", []) if msg.get("role") == "assistant")
+    projection = workflow_projection(patient_entry)
+    if projection:
+        current_agent = {
+            "opening": "SOA",
+            "review_decision": "GRA",
+            "closing": "SCA",
+            "summary": "SSA",
+        }[projection["workflow_phase"]]
     print(f"📋 Session status for patient {patient_id}: turn_index={turn_index} (assistant_msgs={assistant_count}, user_msgs={user_count}, total_msgs={chat_history_len}), session_status={session_status}, current_agent={current_agent}", flush=True)
     
     return {
@@ -629,7 +793,8 @@ async def get_session_status(patient_id: str):
         "turn_index": turn_index,
         "current_agent": current_agent,
         "session_status": session_status,
-        "total_turns": chat_history_len
+        "total_turns": chat_history_len,
+        **projection,
     }
 
 @app.post("/reset_session/{patient_id}")
@@ -710,19 +875,10 @@ async def reset_all_sessions():
     """
     重置所有患者的会话状态（用于定时任务）
     """
-    records = load_goal_reviews()
-    reset_count = 0
-    
-    for patient_entry in records:
-        if patient_entry.get("turn_index", 0) > 0 or len(patient_entry.get("chat_history", [])) > 0:
-            patient_entry["turn_index"] = 0
-            patient_entry["chat_history"] = []
-            reset_count += 1
+    reset_count = reset_active_sessions(load_goal_reviews, save_goal_reviews)
     
     # 保存更新后的记录
     if reset_count > 0:
-        save_goal_reviews(records)
-        
         print(f"Reset all sessions: {reset_count} patients reset", flush=True)
     
     return {

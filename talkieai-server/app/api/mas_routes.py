@@ -1,7 +1,7 @@
 """
 MAS系统API路由：作为网关转发请求到MAS服务
 """
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.core import get_current_account
@@ -14,12 +14,78 @@ from app.models.mas_models import (
     CreateScheduleDTO,
     DeleteMasSessionsDTO,
     CoachStateEventDTO,
+    ResolveWorkflowToolConfirmationDTO,
 )
 from app.services.mas.patient_mapping_service import PatientMappingService
 from app.services.mas.mas_gateway_service import MASGatewayService
 from app.core.logging import logging
 
 router = APIRouter()
+
+
+def _get_patient_id_and_release_db(db: Session, account_id: str) -> str:
+    mapping_service = PatientMappingService(db)
+    patient_id = mapping_service.get_or_create_patient_id(account_id)
+    db.close()
+    return patient_id
+
+
+@router.post("/mas/workflow/tools/execute", name="Execute MAS Workflow Tool")
+async def execute_workflow_tool(
+    dto: ResolveWorkflowToolConfirmationDTO,
+    db: Session = Depends(get_db),
+    account_id: str = Depends(get_current_account),
+):
+    """Execute one account-scoped allowlisted tool through the confirmation gate."""
+    from app.services.mas.tool_handlers import execute_account_tool
+    from app.services.mas.tool_workflow import build_gra_continuation
+    from app.services.mas.pending_tool_confirmation import (
+        PendingActionConflict,
+        PendingActionNotFound,
+        PendingToolConfirmationStore,
+    )
+
+    store = PendingToolConfirmationStore(db)
+    try:
+        if not dto.confirmed:
+            cancelled = store.cancel(dto.action_id, account_id)
+            db.commit()
+            return ApiResponse(
+                data={
+                    "action_id": dto.action_id,
+                    "action_status": cancelled["status"],
+                }
+            )
+
+        action = store.get(dto.action_id, account_id)
+        request = store.claim(dto.action_id, account_id)
+        db.commit()
+    except PendingActionNotFound as error:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(error))
+    except PendingActionConflict as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error))
+
+    result = await execute_account_tool(db, account_id, request, confirmed=True)
+    try:
+        finished = store.finish(dto.action_id, account_id, result.status.value)
+        db.commit()
+    except (PendingActionNotFound, PendingActionConflict) as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error))
+
+    data = result.dict()
+    data["action_id"] = dto.action_id
+    data["action_status"] = finished["status"]
+    patient_id = PatientMappingService(db).get_or_create_patient_id(account_id)
+    continuation = build_gra_continuation(
+        MASGatewayService,
+        patient_id,
+        action["turn_index"],
+    )
+    data["assistant_message"] = await continuation(result)
+    return ApiResponse(data=data)
 
 # ========== MAS会话管理 ==========
 
@@ -114,8 +180,7 @@ async def submit_notes(
     将account_id转换为patient_id，然后转发到MMA服务
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 转换数据格式：添加patient_id到每个笔记
         notes_data = []
@@ -149,8 +214,7 @@ async def get_patient_info(
     如果数据不存在，尝试从对话历史中自动提取
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         result = await MASGatewayService.call_mas_service(
             "mma",
@@ -257,8 +321,7 @@ async def get_patient_goals(
     如果数据不存在，尝试从对话历史中自动提取
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         result = await MASGatewayService.call_mas_service(
             "mma",
@@ -359,8 +422,7 @@ async def get_patient_next_review_time(
     - 如果该预约已触发，则返回 `next_review_time=None`
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
 
         result = await MASGatewayService.call_mas_service(
             "oa",
@@ -448,11 +510,11 @@ async def trigger_session(
     如果提供了patient_id，使用提供的；否则使用当前用户的patient_id
     """
     try:
-        mapping_service = PatientMappingService(db)
         if dto.patient_id:
             patient_id = dto.patient_id
+            db.close()
         else:
-            patient_id = mapping_service.get_or_create_patient_id(account_id)
+            patient_id = _get_patient_id_and_release_db(db, account_id)
         
         result = await MASGatewayService.call_mas_service(
             "soa",
@@ -479,14 +541,25 @@ async def send_message(
     这里简化处理：依次尝试SOA、GRA、SCA，直到成功
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         message_data = {
             "patient_id": patient_id,
             "user_input": dto.user_input,
             "turn_index": dto.turn_index
         }
+
+        from app.services.mas.oa_graph_seam import route_if_latched_graph, stable_graph_request_id
+        graph_result = await route_if_latched_graph(
+            MASGatewayService,
+            patient_id,
+            dto.user_input,
+            dto.turn_index,
+            stable_graph_request_id(account_id, f"mas-route:{patient_id}", f"{dto.turn_index}:{dto.user_input}"),
+            account_id=account_id,
+        )
+        if graph_result is not None:
+            return ApiResponse(data=graph_result)
         
         # 根据turn_index判断代理
         # SOA: turn_index 1-6
@@ -540,8 +613,7 @@ async def get_current_session(
     从OA获取会话状态（需要OA提供此接口）
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 从OA获取会话状态
         result = await MASGatewayService.call_mas_service(
@@ -566,8 +638,7 @@ async def get_conversation_history(
     从OA的goal_reviews.json获取该患者的所有对话记录
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 从OA获取对话历史
         result = await MASGatewayService.call_mas_service(
@@ -592,8 +663,7 @@ async def get_session_summaries(
     从SSA获取该患者的所有会话摘要
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 从SSA获取会话摘要
         result = await MASGatewayService.call_mas_service(
@@ -621,8 +691,7 @@ async def create_schedule(
     将预约数据发送到OA服务
     """
     try:
-        mapping_service = PatientMappingService(db)
-        patient_id = mapping_service.get_or_create_patient_id(account_id)
+        patient_id = _get_patient_id_and_release_db(db, account_id)
         
         # 转换数据格式：添加patient_id
         # - 若有 date：按预约时间触发

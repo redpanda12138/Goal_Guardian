@@ -59,3 +59,106 @@ curl -X POST localhost:8002/trigger \
 ```
 
 Replace `patient_1` with the desired patient_id. This will initiate a SMART goal review session immediately for that patient, bypassing the scheduled review time.
+
+## Optional OA LangGraph routing
+
+LangGraph is embedded in the existing OA service; it does not add another service or database. The legacy routing path remains the default.
+
+Use the two rollout switches in `talkieai-server/.env`:
+
+```dotenv
+# Main-backend capability switch. Keep false until the updated OA is deployed.
+MAS_OA_GRAPH_SEAM_ENABLED=false
+
+# OA rollout switch. Only newly reset/created session generations are affected.
+OA_LANGGRAPH_NEW_SESSIONS_ENABLED=false
+
+# Optional side-effect-free route comparison. This never dispatches an Agent.
+MAS_OA_GRAPH_SHADOW_ENABLED=false
+
+# Optional staged rollout boundaries. Keep both lists aligned through the
+# account-to-patient mapping used by the deployment.
+MAS_OA_GRAPH_TEST_ACCOUNTS=
+OA_LANGGRAPH_TEST_PATIENTS=
+```
+
+Recommended rollout order:
+
+1. Deploy or rebuild OA with both switches set to `false`.
+2. Set `MAS_OA_GRAPH_SEAM_ENABLED=true` and restart the main backend.
+3. Verify existing legacy sessions still route normally.
+4. Set `OA_LANGGRAPH_NEW_SESSIONS_ENABLED=true` and restart OA.
+5. Reset one test patient's session and verify that `/workflow_mode/{patient_id}` reports `graph_v1`.
+
+To stop allocating new graph sessions, set only `OA_LANGGRAPH_NEW_SESSIONS_ENABLED=false`. Existing `graph_v1` session generations remain latched until reset. Keep the main-backend seam enabled while any graph session is active.
+
+Shadow Mode can be enabled while the graph seam remains disabled. It compares
+the pure legacy and graph route decisions but does not reserve a request,
+persist a message, dispatch an Agent, execute a tool, or alter the selected
+legacy path. When either test allowlist is non-empty, only listed identities
+may enter newly allocated graph sessions. Removing an identity does not migrate
+an already-latched active generation; disable new allocation and reset only at
+the next controlled session boundary.
+
+## Local validation
+
+The main backend and OA use incompatible dependency stacks and both expose an
+`app` module. Run their tests in separate Python processes rather than
+collecting all tests in one pytest invocation.
+
+Create the locked OA environment on Windows:
+
+```powershell
+py -3.10 -m venv .venv-oa
+.venv-oa\Scripts\python.exe -m pip install -r mas\OA\requirements-langgraph-phase1.lock
+```
+
+Then run the complete local validation from `talkieai-server` and provide the
+existing main-backend interpreter when it is not at `.venv-main`:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\run_local_validation.ps1 `
+  -MainPython C:\path\to\main-python.exe `
+  -OaPython .venv-oa\Scripts\python.exe
+```
+
+The runner executes the main-backend suite, OA suite, Compose configuration
+validation, frontend unit tests, and the H5 production build. It performs no
+external model calls and does not start or mutate deployed services.
+
+## Optional approved-source RAG
+
+RAG is disabled by default and is used only by `graph_v1` GRA turns. Before
+enabling it, place a reviewed UTF-8 JSON corpus at a path mounted read-only into
+the GRA container. The existing Compose configuration mounts `mas/common` at
+`/app/common`.
+
+```dotenv
+MAS_RAG_ENABLED=false
+MAS_RAG_CORPUS_PATH=/app/common/rag_corpus.json
+```
+
+The corpus root must contain a non-empty `documents` list. Every document must
+be explicitly approved and have a unique stable identifier:
+
+```json
+{
+  "documents": [
+    {
+      "source_id": "source-reviewed-001",
+      "content": "Text copied from an approved source.",
+      "approved": true,
+      "metadata": {
+        "title": "Reviewed source title",
+        "source": "curated-local"
+      }
+    }
+  ]
+}
+```
+
+Do not enable this switch with placeholder or unreviewed health content. Invalid
+or missing enabled corpora fail the RAG-enhanced turn into the existing GRA
+fallback. Retrieved text is treated as untrusted reference data, is bounded to
+1,200 characters per result, and is returned with source identifiers for
+traceability.

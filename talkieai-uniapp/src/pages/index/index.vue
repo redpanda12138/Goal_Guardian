@@ -29,7 +29,14 @@
                 </view>
               </view>
               <view class="intro-bottom-box">
-                <view @tap="goChat" class="index-btn">Chat With Coach</view>
+                <view
+                  @tap="goChat"
+                  class="index-btn"
+                  :class="{ 'is-loading': chatLoading }"
+                >
+                  <view v-if="chatLoading" class="chat-loading-icon" />
+                  <text>{{ chatLoading ? "Opening..." : "Chat With Coach" }}</text>
+                </view>
               </view>
             </view>
           </view>
@@ -57,13 +64,20 @@ import {
 } from "@/utils/masCoachReminder";
 import { onShow } from "@dcloudio/uni-app";
 import { ref } from "vue";
+import { consumeHomeRefreshNeeded } from "@/utils/pageRefreshState";
 
 const loading = ref(false);
+const chatLoading = ref(false);
 const nextAppointmentText = ref("Not scheduled");
 const coachDashboard = ref<Record<string, any> | null>(null);
 const dashboardLoading = ref(false);
+const homeLoaded = ref(false);
 
 onShow(() => {
+  chatLoading.value = false;
+  if (homeLoaded.value && !consumeHomeRefreshNeeded()) return;
+
+  homeLoaded.value = true;
   initData();
   loadCoachDashboard();
 });
@@ -140,6 +154,9 @@ const goSchedule = () => {
 };
 
 const goChat = () => {
+  if (chatLoading.value) return;
+
+  chatLoading.value = true;
   handleMasChat();
 };
 /** Home 与 Coach 共用同一 MAS 会话：get-or-create 后进入聊天 */
@@ -156,7 +173,9 @@ const handleMasChat = () => {
       title: "Could not open coach chat",
       icon: "none",
     });
+    chatLoading.value = false;
   }).catch((e) => {
+    chatLoading.value = false;
     console.error("Failed to list MAS sessions:", e);
     const errorMsg = e?.detail || e?.message || "Unknown error";
     uni.showToast({
@@ -318,9 +337,29 @@ const handleMasChat = () => {
           border: none;
 
           .index-btn {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10rpx;
             font-size: 24rpx;
             font-weight: 500;
             color: @coach-purple-900;
+
+            &.is-loading {
+              opacity: 0.72;
+            }
+
+            .chat-loading-icon {
+              width: 22rpx;
+              height: 22rpx;
+              box-sizing: border-box;
+              border: 3rpx solid rgba(75, 47, 122, 0.25);
+              border-top-color: @coach-purple-900;
+              border-radius: 50%;
+              animation: chat-loading-spin 0.65s linear infinite;
+            }
           }
         }
       }
@@ -330,6 +369,12 @@ const handleMasChat = () => {
   .topic-component {
     width: 100%;
     margin-top: 40rpx;
+  }
+}
+
+@keyframes chat-loading-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>

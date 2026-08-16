@@ -2,6 +2,8 @@
 /talkieai-server/.env.production
 /talkieai-server/mas/.env
 /talkieai-server/myenv/
+/talkieai-server/.venv-oa/
+/talkieai-server/.venv-main/
 /talkieai-server/.pytest_cache/
 /talkieai-server/uploads/
 /talkieai-server/app.db
@@ -21,4 +23,6 @@
 /.cursor/
 /.vscode/
 /.worktrees/
+/tasks/
+/.codexignore
 /tmp_bloom_extracted.txt

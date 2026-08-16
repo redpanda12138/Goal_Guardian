@@ -52,6 +52,12 @@ class Config:
     MAS_SCA_URL = os.getenv('MAS_SCA_URL', 'http://localhost:8004')
     MAS_SSA_URL = os.getenv('MAS_SSA_URL', 'http://localhost:8005')
     MAS_OA_URL = os.getenv('MAS_OA_URL', 'http://localhost:8006')
+    # Deployment capability switch, not a per-session rollout flag. Keep this on
+    # after rollout begins so latched graph sessions remain reachable; OA's
+    # OA_LANGGRAPH_NEW_SESSIONS_ENABLED alone controls new-session allocation.
+    MAS_OA_GRAPH_SEAM_ENABLED = os.getenv('MAS_OA_GRAPH_SEAM_ENABLED', 'false').lower() == 'true'
+    MAS_OA_GRAPH_SHADOW_ENABLED = os.getenv('MAS_OA_GRAPH_SHADOW_ENABLED', 'false').lower() == 'true'
+    MAS_OA_GRAPH_TEST_ACCOUNTS = os.getenv('MAS_OA_GRAPH_TEST_ACCOUNTS', '')
     # OA 定时调度：talkieai-server 是否定时调用 OA（若 OA 内部 loop 已运行，可设为 false 避免重复）
     MAS_OA_SCHEDULER_ENABLED = os.getenv('MAS_OA_SCHEDULER_ENABLED', 'true').lower() == 'true'
     # MAS 代理（SOA/GRA/SCA）调用大模型可能超过 30s，读超时过短会出现 httpx.ReadTimeout

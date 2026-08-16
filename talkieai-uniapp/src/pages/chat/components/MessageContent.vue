@@ -17,8 +17,15 @@
           <FunctionalText ref="functionalTextRef" :auto-play="message.auto_play || false" :messageId="message.id"
             :wordClickable="true" :text="message.content" :fileName="message.file_name" :translateShow="translateShow"
          />
-          <view class="divider"></view>
-          <view class="action-container">
+          <ToolConfirmation
+            v-if="message.tool_confirmation"
+            :state="message.tool_confirmation"
+            @confirm="$emit('confirm-tool')"
+            @cancel="$emit('cancel-tool')"
+            @refresh="$emit('refresh-tool')"
+          />
+          <view v-if="message.actions_enabled !== false" class="divider"></view>
+          <view v-if="message.actions_enabled !== false" class="action-container">
             <view class="btn-box" :class="{ active: translateShow }">
               <image class="action-icon" @tap="handleTranslateText" src="/static/icon_translate.png" />
             </view>
@@ -76,6 +83,7 @@ import Loading from "@/components/Loading.vue";
 import LoadingRound from "@/components/LoadingRound.vue";
 import chatRequest from "@/api/chat";
 import utils from "@/utils/utils";
+import ToolConfirmation from "./ToolConfirmation.vue";
 
 const functionalTextRef = ref(null);
 const messageGrammarRef = ref(null);
@@ -84,6 +92,12 @@ const translateShow = ref(false);
 
 const props = defineProps<{
   message: Message;
+}>();
+
+defineEmits<{
+  (event: "confirm-tool"): void;
+  (event: "cancel-tool"): void;
+  (event: "refresh-tool"): void;
 }>();
 
 onMounted(() => {

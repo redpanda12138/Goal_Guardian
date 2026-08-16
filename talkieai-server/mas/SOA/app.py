@@ -1,3 +1,6 @@
+import asyncio
+import functools
+from contextlib import asynccontextmanager
 import requests, json
 from pathlib import Path
 import sys
@@ -12,12 +15,15 @@ for common_dir in (
         sys.path.insert(0, str(common_dir))
 
 from mas_memory_store import load_json, save_json
+from prompt_guard import build_coach_prompt, safe_coach_reply
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/patient_notes"
 OA_URL = "http://oa:8000/receive_message"
 OA_USER_URL = "http://oa:8000/receive_user_message"
 GRA_URL = "http://oa:8000/trigger_agent"
+REQUEST_TIMEOUT_SECONDS = 15
+AGENT_TRANSITION_TIMEOUT_SECONDS = 90
 
 MEMORY_FILE = Path("/app/memory/soa_conversations.json")
 SERVICE_NAME = "soa"
@@ -25,12 +31,58 @@ SERVICE_NAME = "soa"
 
 # === Initialization ===
 app = FastAPI()
+_patient_locks = {}
+_patient_locks_guard = asyncio.Lock()
 
 
 # === AI Wrapper (支持OpenAI和智谱AI) ===
 def ask_gpt(messages):
     """统一的AI调用接口，支持OpenAI GPT和智谱AI"""
     return ask_ai(messages, temperature=0.7)
+
+
+async def run_blocking(func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+
+
+@asynccontextmanager
+async def patient_session_lock(patient_id):
+    async with _patient_locks_guard:
+        lock = _patient_locks.setdefault(patient_id, asyncio.Lock())
+    async with lock:
+        yield
+
+
+async def post_json(url, payload):
+    return await run_blocking(
+        requests.post,
+        url,
+        json=payload,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+
+
+async def persist_oa_message(url, payload, label, patient_id, turn_index):
+    try:
+        response = await post_json(url, payload)
+        if response.status_code == 200:
+            print(f"Sent {label} to OA for patient {patient_id} (turn {turn_index})", flush=True)
+            return True
+        print(f"Failed to send {label} to OA (status {response.status_code})", flush=True)
+    except Exception as e:
+        print(f"Error sending {label} to OA: {e}", flush=True)
+    return False
+
+
+def return_oa_persistence_error(patient_id, turn_index):
+    return {
+        "status": "error",
+        "reason": "OA persistence failed",
+        "patient_id": patient_id,
+        "turn_index": turn_index,
+        "persisted": False,
+    }
 
 
 # === Memory Handlers ===
@@ -65,7 +117,7 @@ async def trigger(request: Request):
     print(f"SOA was triggered to do weekly SMART goal review for patient {patient_id}", flush=True)
 
     try:
-        response = requests.get(f"{MMA_URL}/{patient_id}")
+        response = await run_blocking(requests.get, f"{MMA_URL}/{patient_id}")
         if response.status_code == 200:
             notes = response.json()
             print(f"Retrieved {notes} from MMA for patient {patient_id}", flush=True)
@@ -78,24 +130,48 @@ async def trigger(request: Request):
 
     preferred_name = notes.get("preferred_name") or "there"
 
-    system_prompt = "You are a warm, empathetic health coach opening a session."
+    system_prompt = (
+        "You are a warm, empathetic health coach opening a session. "
+        "Return only the message that should be shown to the client."
+    )
+    initial_fallback = (
+        f"Hi {preferred_name}! How are you feeling today? What's your energy level?"
+        if preferred_name and preferred_name != "there"
+        else "Hi there! How are you feeling today? What's your energy level?"
+    )
     initial_prompt = [
         {"role": "system", "content": system_prompt},
-        {"role": "assistant", "content": f"Greet '{preferred_name}' and ask about energy level."}
+        {
+            "role": "user",
+            "content": build_coach_prompt(
+                f"Preferred name: {preferred_name}",
+                "Greet the client warmly and ask about their energy level.",
+            ),
+        },
     ]
 
     # AI调用，添加异常处理
     try:
-        assistant_reply = ask_gpt(initial_prompt)
+        assistant_reply = safe_coach_reply(await run_blocking(ask_gpt, initial_prompt), initial_fallback)
     except Exception as e:
         print(f"Error calling AI service: {e}", flush=True)
-        # 使用fallback消息，避免整个流程失败
-        if preferred_name and preferred_name != "there":
-            assistant_reply = f"Hi {preferred_name}! How are you feeling today? What's your energy level?"
-        else:
-            assistant_reply = "Hi there! How are you feeling today? What's your energy level?"
+        assistant_reply = initial_fallback
 
     chat_history = [{"role": "assistant", "content": assistant_reply}]
+
+    persisted = await persist_oa_message(
+        OA_URL,
+        {
+            "patient_id": patient_id,
+            "turn_index": 1,
+            "message": assistant_reply
+        },
+        "assistant message",
+        patient_id,
+        1,
+    )
+    if not persisted:
+        return return_oa_persistence_error(patient_id, 1)
 
     save_message({
         "patient_id": patient_id,
@@ -103,30 +179,27 @@ async def trigger(request: Request):
         "chat_history": chat_history
     })
 
-    try:
-        oa_response = requests.post(OA_URL, json={
-            "patient_id": patient_id,
-            "turn_index": 1,
-            "message": assistant_reply
-        })
-        if oa_response.status_code == 200:
-            print(f"Sent HC message to OA for patient {patient_id} (turn 1)", flush=True)
-        else:
-            print(f"Failed to send message to OA (status {oa_response.status_code})", flush=True)
-    except Exception as e:
-        print(f"Error sending message to OA: {e}", flush=True)
-
-    return {"status": "SOA triggered", "patient_id": patient_id}
+    return {
+        "status": "SOA triggered",
+        "patient_id": patient_id,
+        "assistant_message": assistant_reply,
+        "persisted": True,
+    }
 
 @app.post("/receive_message")
 async def receive_message(request: Request):
     data = await request.json()
     patient_id = data.get("patient_id")
-    user_input = data.get("user_input")
-    turn_index = int(data.get("turn_index"))
-
     if not patient_id:
         return {"status": "error", "reason": "Missing patient_id"}
+    async with patient_session_lock(patient_id):
+        return await _receive_message_locked(data)
+
+
+async def _receive_message_locked(data):
+    patient_id = data.get("patient_id")
+    user_input = data.get("user_input")
+    turn_index = int(data.get("turn_index"))
 
     # 检查会话是否已结束
     if turn_index >= 15:
@@ -140,7 +213,7 @@ async def receive_message(request: Request):
     if not patient_entry:
         return {"status": "error", "reason": "Patient session not found"}
 
-    chat_history = patient_entry.get("chat_history", [])
+    chat_history = list(patient_entry.get("chat_history", []))
     
     # 如果turn_index >= 6，SOA不应该再处理，应该由GRA处理
     if turn_index >= 6:
@@ -163,18 +236,19 @@ async def receive_message(request: Request):
     chat_history.append({"role": "user", "content": user_input})
 
     # 将用户消息同步到 OA 的 goal_reviews.json（role: user）
-    try:
-        oa_user_resp = requests.post(OA_USER_URL, json={
+    user_persisted = await persist_oa_message(
+        OA_USER_URL,
+        {
             "patient_id": patient_id,
             "turn_index": turn_index,
             "user_input": user_input
-        })
-        if oa_user_resp.status_code == 200:
-            print(f"Sent user message to OA for patient {patient_id} (turn {turn_index})", flush=True)
-        else:
-            print(f"Failed to send user message to OA (status {oa_user_resp.status_code})", flush=True)
-    except Exception as e:
-        print(f"Error sending user message to OA: {e}", flush=True)
+        },
+        "user message",
+        patient_id,
+        turn_index,
+    )
+    if not user_persisted:
+        return return_oa_persistence_error(patient_id, turn_index)
 
     notes = patient_entry.get("notes", {})
 
@@ -189,20 +263,49 @@ async def receive_message(request: Request):
     turn_index += 1
 
     assistant_prompt = ""
+    assistant_fallback = "Thanks for sharing. Could you tell me a little more about that?"
     if turn_index == 2:
-        assistant_prompt = f"The client said: '{user_input}'. If number, ask what it means. If mood, ask why."
+        assistant_prompt = build_coach_prompt(
+            user_input,
+            "If the client gave a number, ask what it means. If they described a mood, ask why. Keep it brief.",
+        )
+        assistant_fallback = "Thanks for sharing. Could you tell me a little more about what that means for you?"
     elif turn_index == 3:
-        assistant_prompt = f"The client said: '{user_input}'. Reflect empathetically and ask for a positive health moment from last week."
+        assistant_prompt = build_coach_prompt(
+            user_input,
+            "Reflect empathetically and ask for one positive health moment from last week.",
+        )
+        assistant_fallback = "I'm glad you shared that. What was one positive health moment from last week?"
     elif turn_index == 4:
         if user_input.strip():
-            assistant_prompt = f"The client said: '{user_input}'. Reflect positively and ask a light follow-up."
+            assistant_prompt = build_coach_prompt(
+                user_input,
+                "Reflect positively and ask one light follow-up question.",
+            )
+            assistant_fallback = "That sounds like a positive moment. What helped make that happen?"
         else:
-            assistant_prompt = f"The client didn’t share much. Use fallback: '{fallback_text}' to keep the conversation going."
+            assistant_prompt = build_coach_prompt(
+                user_input,
+                f"The client did not share much. Use this topic if useful: {fallback_text}. Ask a gentle follow-up.",
+            )
+            assistant_fallback = (
+                f"No worries. Could you tell me about something connected to {fallback_text} that felt positive recently?"
+                if fallback_text
+                else "No worries. Could you share one small thing that felt positive recently?"
+            )
     elif turn_index == 5:
         if user_input.strip():
-            assistant_prompt = f"The client said: '{user_input}'. Reflect positively. Do not say goodbye."
+            assistant_prompt = build_coach_prompt(
+                user_input,
+                "Reflect positively. Do not say goodbye and do not ask another question.",
+            )
+            assistant_fallback = "Thank you for reflecting on that. It is encouraging to notice these moments and what supports them."
         else:
-            assistant_prompt = "The client didn’t say much. Share a short encouraging comment without saying goodbye."
+            assistant_prompt = build_coach_prompt(
+                user_input,
+                "Share a short encouraging comment without saying goodbye.",
+            )
+            assistant_fallback = "Thank you for staying with the reflection. Even small observations can be useful."
 
     assistant_reply = ""
     if turn_index < 6:
@@ -212,38 +315,37 @@ async def receive_message(request: Request):
                 {"role": "user", "content": assistant_prompt}
             ]
         try:
-            assistant_reply = ask_gpt(full_prompt)
+            assistant_reply = safe_coach_reply(await run_blocking(ask_gpt, full_prompt), assistant_fallback)
         except Exception as e:
             print(f"Error calling AI service in receive_message: {e}", flush=True)
-            # 使用fallback消息
-            assistant_reply = assistant_prompt
+            assistant_reply = assistant_fallback
         chat_history.append({"role": "assistant", "content": assistant_reply})
-        try:
-            oa_response = requests.post(OA_URL, json={
+        assistant_persisted = await persist_oa_message(
+            OA_URL,
+            {
                 "patient_id": patient_id,
                 "turn_index": turn_index,
                 "message": assistant_reply
-            })
-            if oa_response.status_code == 200:
-                print(f"Sent HC message to OA for patient {patient_id} (turn {turn_index})", flush=True)
-            else:
-                print(f"Failed to send message to OA (status {oa_response.status_code})", flush=True)
-        except Exception as e:
-            print(f"Error sending message to OA: {e}", flush=True)
+            },
+            "assistant message",
+            patient_id,
+            turn_index,
+        )
+        if not assistant_persisted:
+            return return_oa_persistence_error(patient_id, turn_index)
     elif turn_index == 6:
         agent_to_trigger = "GRA"
         try:
             # 触发GRA并等待完成，确保turn_index正确更新
-            gra_response = requests.post(GRA_URL, json={
+            gra_response = await run_blocking(requests.post, GRA_URL, json={
                 "patient_id": patient_id,
                 "turn_index": turn_index,
                 "agent_to_trigger": agent_to_trigger
-            }, timeout=10)
+            }, timeout=AGENT_TRANSITION_TIMEOUT_SECONDS)
             if gra_response.status_code == 200:
                 print(f"Triggered {agent_to_trigger} for patient {patient_id}", flush=True)
                 # 等待一下，确保GRA的消息已经到达OA并更新turn_index
-                import time
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
             else:
                 print(f"Failed to trigger {agent_to_trigger} for patient {patient_id} (status {gra_response.status_code})", flush=True)
         except Exception as e:
@@ -254,4 +356,9 @@ async def receive_message(request: Request):
         "chat_history": chat_history
     })
 
-    return {"status": "message processed", "turn_index": turn_index}
+    return {
+        "status": "message processed",
+        "turn_index": turn_index,
+        "assistant_message": assistant_reply,
+        "persisted": True,
+    }

@@ -35,6 +35,7 @@ class FakeDBSession:
     def __init__(self):
         self.rows = []
         self.commits = 0
+        self.close_calls = 0
 
     def query(self, model):
         return FakeQuery(self.rows)
@@ -44,6 +45,9 @@ class FakeDBSession:
 
     def commit(self):
         self.commits += 1
+
+    def close(self):
+        self.close_calls += 1
 
 
 class StubPatientMappingService:
@@ -71,7 +75,7 @@ class FixedDateTime(real_datetime):
         return cls(2026, 4, 23, 9, 30, 0)
 
 
-def load_coach_dashboard_module():
+def load_coach_dashboard_module(monkeypatch):
     module_name = "coach_dashboard_service_under_test"
     module_path = (
         Path(__file__).resolve().parents[1]
@@ -90,22 +94,25 @@ def load_coach_dashboard_module():
     mas_pkg = types.ModuleType("app.services.mas")
     mas_pkg.__path__ = []
 
-    sys.modules["app"] = app_pkg
-    sys.modules["app.db"] = db_pkg
-    sys.modules["app.services"] = services_pkg
-    sys.modules["app.services.mas"] = mas_pkg
-
     sys_entities_module = types.ModuleType("app.db.sys_entities")
     sys_entities_module.SysCacheEntity = FakeSysCacheEntity
-    sys.modules["app.db.sys_entities"] = sys_entities_module
 
     gateway_module = types.ModuleType("app.services.mas.mas_gateway_service")
     gateway_module.MASGatewayService = StubMASGatewayService
-    sys.modules["app.services.mas.mas_gateway_service"] = gateway_module
 
     patient_module = types.ModuleType("app.services.mas.patient_mapping_service")
     patient_module.PatientMappingService = StubPatientMappingService
-    sys.modules["app.services.mas.patient_mapping_service"] = patient_module
+
+    for module_name, stub_module in {
+        "app": app_pkg,
+        "app.db": db_pkg,
+        "app.services": services_pkg,
+        "app.services.mas": mas_pkg,
+        "app.db.sys_entities": sys_entities_module,
+        "app.services.mas.mas_gateway_service": gateway_module,
+        "app.services.mas.patient_mapping_service": patient_module,
+    }.items():
+        monkeypatch.setitem(sys.modules, module_name, stub_module)
 
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     module = importlib.util.module_from_spec(spec)
@@ -116,7 +123,7 @@ def load_coach_dashboard_module():
 
 
 @pytest.fixture
-def coach_module():
+def coach_module(monkeypatch):
     StubMASGatewayService.responses = {
         ("mma", "/patient_goals/patient-acct-1", "GET"): {
             "preferred_name": "Alex",
@@ -133,7 +140,7 @@ def coach_module():
             "latest_summary": "Kept up the routine this week.",
         },
     }
-    return load_coach_dashboard_module()
+    return load_coach_dashboard_module(monkeypatch)
 
 
 @pytest.fixture
@@ -150,6 +157,72 @@ def test_build_dashboard_includes_review_sections(coach_module, db_session):
     assert "weekly_review" in dashboard
     assert "overall_review" in dashboard
     assert dashboard["overall_review"]["window"] == "5"
+
+
+def test_graph_dashboard_uses_a_validated_workflow_stage_projection(
+    coach_module, db_session
+):
+    StubMASGatewayService.responses[
+        ("oa", "/session_status/patient-acct-1", "GET")
+    ] = {
+        "status": "ok",
+        "session_status": "active",
+        "workflow_mode": "graph_v1",
+        "workflow_version": "oa_graph_v1",
+        "session_generation": 3,
+        "workflow_phase": "review_decision",
+        "workflow_stage": "waiting_user",
+    }
+
+    dashboard = asyncio.run(
+        coach_module.CoachDashboardService.build_dashboard(db_session, "acct-1")
+    )
+
+    assert dashboard["session_status"]["workflow_stage"] == "waiting_user"
+    assert dashboard["session_status"]["stage_source"] == "workflow_state"
+
+
+def test_invalid_graph_stage_fails_closed_without_breaking_dashboard(
+    coach_module, db_session
+):
+    StubMASGatewayService.responses[
+        ("oa", "/session_status/patient-acct-1", "GET")
+    ] = {
+        "status": "ok",
+        "session_status": "active",
+        "workflow_mode": "graph_v1",
+        "workflow_version": "oa_graph_v1",
+        "session_generation": 3,
+        "workflow_phase": "review_decision",
+        "workflow_stage": "arbitrary_model_stage",
+    }
+
+    dashboard = asyncio.run(
+        coach_module.CoachDashboardService.build_dashboard(db_session, "acct-1")
+    )
+
+    assert dashboard["session_status"] == {
+        "status": "error",
+        "workflow_mode": "graph_v1",
+        "reason": "invalid_workflow_projection",
+    }
+
+
+def test_legacy_dashboard_session_payload_remains_unchanged(coach_module, db_session):
+    legacy = {
+        "status": "ok",
+        "session_status": "active",
+        "current_agent": "GRA",
+    }
+    StubMASGatewayService.responses[
+        ("oa", "/session_status/patient-acct-1", "GET")
+    ] = legacy
+
+    dashboard = asyncio.run(
+        coach_module.CoachDashboardService.build_dashboard(db_session, "acct-1")
+    )
+
+    assert dashboard["session_status"] == legacy
 
 
 def test_save_ledger_preserves_weekly_history(coach_module, db_session):

@@ -1,8 +1,10 @@
 """
 MAS系统相关的数据模型
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt, validator
 from typing import Optional, List, Dict, Any
+
+from app.models.mas_workflow_models import ToolRequest
 
 
 class SubmitNotesDTO(BaseModel):
@@ -37,3 +39,30 @@ class CoachStateEventDTO(BaseModel):
     goal_index: Optional[int] = None
     note: Optional[str] = None
     message: Optional[str] = None
+
+
+class ExecuteWorkflowToolDTO(BaseModel):
+    """Authenticated execution request for one allowlisted workflow tool."""
+
+    tool_request: ToolRequest
+    confirmed: bool = False
+    turn_index: Optional[StrictInt] = None
+
+    @validator("turn_index")
+    def validate_turn_index(cls, value):
+        if value is not None and (type(value) is not int or not 0 <= value <= 15):
+            raise ValueError("turn_index must be between 0 and 15")
+        return value
+
+
+class ResolveWorkflowToolConfirmationDTO(BaseModel):
+    """Resolve one server-owned workflow-tool confirmation action."""
+
+    action_id: str
+    confirmed: bool
+
+    @validator("action_id")
+    def validate_action_id(cls, value):
+        if not isinstance(value, str) or not value.strip() or len(value) > 80:
+            raise ValueError("action_id must be a non-empty stable identifier")
+        return value.strip()

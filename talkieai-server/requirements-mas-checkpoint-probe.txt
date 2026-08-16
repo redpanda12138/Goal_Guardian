@@ -1,0 +1,9 @@
+# BLOCKED: This file intentionally contains no installable packages.
+#
+# Task 1.4 did not approve a LangGraph dependency set for this project. The
+# earlier langgraph==0.2.28 and langchain-core==0.2.43 candidate is affected
+# by GHSA-g48c-2wqr-h844 (langgraph <=1.0.9; patched in 1.0.10).
+#
+# Do not use this file to install LangGraph, LangChain, checkpoint, or Psycopg
+# dependencies. Under the fixed Pydantic 1.10.5 and HTTPX 0.25.0 application
+# stack, no LangGraph production version has been approved.
