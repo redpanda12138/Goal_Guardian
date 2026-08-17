@@ -50,11 +50,15 @@
       <view class="trend-list">
         <CoachOverallTrendChart
           title="Completion Rate Trend"
+          chart-type="line"
+          :y-max="100"
+          value-suffix="%"
           :points="completionRatePoints"
         />
 
         <CoachOverallTrendChart
           title="Plan vs Done Trend"
+          chart-type="bar"
           :points="planVsDonePoints"
           :has-secondary="true"
           primary-legend="Planned"
@@ -63,6 +67,7 @@
 
         <CoachOverallTrendChart
           title="Cumulative Progress Trend"
+          chart-type="area"
           :points="cumulativeProgressPoints"
         />
       </view>

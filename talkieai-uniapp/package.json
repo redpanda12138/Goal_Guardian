@@ -36,7 +36,7 @@
     "build:quickapp-webview": "uni build -p quickapp-webview",
     "build:quickapp-webview-huawei": "uni build -p quickapp-webview-huawei",
     "build:quickapp-webview-union": "uni build -p quickapp-webview-union",
-    "test:unit": "node tests/tool-confirmation-state.test.mjs && node tests/chat-request-policy.test.mjs && node tests/coach-dashboard-presentation.test.mjs",
+    "test:unit": "node tests/tool-confirmation-state.test.mjs && node tests/chat-request-policy.test.mjs && node tests/coach-dashboard-presentation.test.mjs && node tests/coach-trend-chart-semantics.test.mjs",
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
