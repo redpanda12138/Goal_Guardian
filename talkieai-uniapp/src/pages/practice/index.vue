@@ -100,6 +100,7 @@
         <CoachOverallReviewCard
           :review="dashboard?.overall_review"
           :loading="dashboardLoading || overallReviewLoading"
+          :active="tabNum === '1'"
           :active-window="overallReviewDisplayWindow"
           :stale="dashboardStale"
           :last-updated-at="dashboardLastUpdatedAt"

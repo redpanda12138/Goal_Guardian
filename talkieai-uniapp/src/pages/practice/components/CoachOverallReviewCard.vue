@@ -51,6 +51,7 @@
         <CoachOverallTrendChart
           title="Completion Rate Trend"
           chart-type="line"
+          :active="active"
           :y-max="100"
           value-suffix="%"
           :points="completionRatePoints"
@@ -59,6 +60,7 @@
         <CoachOverallTrendChart
           title="Plan vs Done Trend"
           chart-type="bar"
+          :active="active"
           :points="planVsDonePoints"
           :has-secondary="true"
           primary-legend="Planned"
@@ -68,6 +70,7 @@
         <CoachOverallTrendChart
           title="Cumulative Progress Trend"
           chart-type="area"
+          :active="active"
           :points="cumulativeProgressPoints"
         />
       </view>
@@ -114,6 +117,7 @@ const props = withDefaults(
   defineProps<{
     review?: OverallReviewPayload | null;
     loading?: boolean;
+    active?: boolean;
     activeWindow: ReviewWindow;
     stale?: boolean;
     lastUpdatedAt?: string;
@@ -121,6 +125,7 @@ const props = withDefaults(
   {
     review: null,
     loading: false,
+    active: true,
     stale: false,
     lastUpdatedAt: "",
   }

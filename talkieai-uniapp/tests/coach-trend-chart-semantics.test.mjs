@@ -6,6 +6,10 @@ import path from "node:path";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const componentsDir = path.resolve(testDir, "../src/pages/practice/components");
+const practicePageSource = readFileSync(
+  path.resolve(componentsDir, "../index.vue"),
+  "utf8"
+);
 const reviewCardSource = readFileSync(
   path.join(componentsDir, "CoachOverallReviewCard.vue"),
   "utf8"
@@ -38,6 +42,31 @@ test("renders line and area trends with an App-compatible canvas", () => {
   assert.match(chartSource, /context\.moveTo\([\s\S]*?context\.lineTo\([\s\S]*?context\.stroke\(\)/);
   assert.match(chartSource, /chartType === "area"[\s\S]*?context\.closePath\(\)[\s\S]*?context\.fill\(\)/);
   assert.doesNotMatch(chartSource, /<(?:svg|polyline|polygon)\b/);
+});
+
+test("redraws after tab visibility changes and keeps points on the canvas path", () => {
+  assert.match(practicePageSource, /<CoachOverallReviewCard[\s\S]*?:active="tabNum === '1'"/);
+  assert.match(reviewCardSource, /active\?:\s*boolean/);
+  assert.match(
+    reviewCardSource,
+    /<CoachOverallTrendChart[\s\S]*?:active="active"/
+  );
+  assert.match(chartSource, /active\?:\s*boolean/);
+  assert.match(
+    chartSource,
+    /watch\(\s*\(\)\s*=>\s*props\.active[\s\S]*?scheduleDraw/
+  );
+  assert.match(chartSource, /context\.arc\(/);
+  assert.match(chartSource, /context\.fillText\(/);
+  assert.doesNotMatch(chartSource, /class="overall-trend-point"/);
+});
+
+test("uses an opaque-enough area fill and narrow grouped bars", () => {
+  assert.match(
+    chartSource,
+    /setFillStyle\("rgba\(124,\s*58,\s*237,\s*0\.(?:2[5-9]|[3-9]\d?)\)"\)/
+  );
+  assert.match(chartSource, /\.overall-trend-bar\s*\{[\s\S]*?width:\s*(?:1[6-9]|2[0-2])rpx/);
 });
 
 test("shows grouped bar values and keeps every chart inside its card", () => {

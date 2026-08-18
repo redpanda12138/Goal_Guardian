@@ -47,16 +47,6 @@
           :hidpi="true"
           aria-hidden="true"
         />
-
-        <view
-          v-for="point in lineCoordinates"
-          :key="point.key"
-          class="overall-trend-point"
-          :style="{ left: point.x + '%', top: point.y + '%' }"
-        >
-          <text class="overall-trend-point-value">{{ point.displayValue }}</text>
-          <view class="overall-trend-point-dot" />
-        </view>
       </view>
 
       <view class="overall-trend-line-labels">
@@ -74,7 +64,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, getCurrentInstance, nextTick, onMounted, watch } from "vue";
+import {
+  computed,
+  getCurrentInstance,
+  nextTick,
+  onActivated,
+  onMounted,
+  onUnmounted,
+  watch,
+} from "vue";
 import { maxSeriesValue } from "./coachReviewFormatters";
 
 type ChartType = "bar" | "line" | "area";
@@ -97,6 +95,7 @@ const props = withDefaults(
     title: string;
     points?: TrendPoint[];
     chartType?: ChartType;
+    active?: boolean;
     yMax?: number;
     valueSuffix?: string;
     hasSecondary?: boolean;
@@ -106,6 +105,7 @@ const props = withDefaults(
   {
     points: () => [],
     chartType: "bar",
+    active: true,
     yMax: 0,
     valueSuffix: "",
     hasSecondary: false,
@@ -116,6 +116,7 @@ const props = withDefaults(
 
 const componentInstance = getCurrentInstance()?.proxy;
 const canvasId = `coach-trend-canvas-${++chartInstanceSequence}`;
+let drawTimer: ReturnType<typeof setTimeout> | null = null;
 
 const showLegend = computed(
   () => props.hasSecondary && !!props.primaryLegend && !!props.secondaryLegend
@@ -182,48 +183,75 @@ const lineCoordinates = computed(() => {
 
 const hasTrend = computed(() => lineCoordinates.value.length > 1);
 
-function drawTrendCanvas() {
-  if (props.chartType === "bar") return;
+function cancelScheduledDraw() {
+  if (drawTimer === null) return;
+  clearTimeout(drawTimer);
+  drawTimer = null;
+}
 
+function scheduleDraw(delay = 48) {
+  if (props.chartType === "bar" || !props.active) return;
+  cancelScheduledDraw();
   nextTick(() => {
-    const query = uni.createSelectorQuery();
-    if (componentInstance) query.in(componentInstance);
+    drawTimer = setTimeout(() => {
+      drawTimer = null;
+      drawTrendCanvas(0);
+    }, delay);
+  });
+}
 
-    query
-      .select(`#${canvasId}`)
-      .boundingClientRect((rect: any) => {
-        const width = Number(rect?.width ?? 0);
-        const height = Number(rect?.height ?? 0);
-        if (width <= 0 || height <= 0) return;
+function drawTrendCanvas(retryCount: number) {
+  if (props.chartType === "bar" || !props.active) return;
 
-        // DCloud CanvasContext API requires the component instance for a
-        // canvas declared inside a custom component.
-        const context = uni.createCanvasContext(canvasId, componentInstance);
-        context.clearRect(0, 0, width, height);
+  const query = uni.createSelectorQuery();
+  if (componentInstance) query.in(componentInstance);
 
-        if (!hasTrend.value) {
-          context.draw();
-          return;
+  query
+    .select(`#${canvasId}`)
+    .boundingClientRect((rect: any) => {
+      const width = Number(rect?.width ?? 0);
+      const height = Number(rect?.height ?? 0);
+      if (width <= 0 || height <= 0) {
+        if (retryCount < 2) {
+          drawTimer = setTimeout(() => {
+            drawTimer = null;
+            drawTrendCanvas(retryCount + 1);
+          }, 80);
         }
+        return;
+      }
 
-        const points = lineCoordinates.value.map((point) => ({
-          x: (point.x / 100) * width,
-          y: (point.y / 100) * height,
-        }));
-        const baseline = (BASELINE_PERCENT / 100) * height;
-        const first = points[0];
-        const last = points[points.length - 1];
+      // DCloud CanvasContext API requires the component instance for a
+      // canvas declared inside a custom component.
+      const context = uni.createCanvasContext(canvasId, componentInstance);
+      context.clearRect(0, 0, width, height);
 
-        if (props.chartType === "area") {
-          context.beginPath();
-          context.moveTo(first.x, baseline);
-          points.forEach((point) => context.lineTo(point.x, point.y));
-          context.lineTo(last.x, baseline);
-          context.closePath();
-          context.setFillStyle("rgba(124, 92, 191, 0.18)");
-          context.fill();
-        }
+      const points = lineCoordinates.value.map((point) => ({
+        x: (point.x / 100) * width,
+        y: (point.y / 100) * height,
+        displayValue: point.displayValue,
+      }));
 
+      if (points.length === 0) {
+        context.draw();
+        return;
+      }
+
+      const baseline = (BASELINE_PERCENT / 100) * height;
+      const first = points[0];
+      const last = points[points.length - 1];
+
+      if (props.chartType === "area" && hasTrend.value) {
+        context.beginPath();
+        context.moveTo(first.x, baseline);
+        points.forEach((point) => context.lineTo(point.x, point.y));
+        context.lineTo(last.x, baseline);
+        context.closePath();
+        context.setFillStyle("rgba(124, 58, 237, 0.3)");
+        context.fill();
+      }
+
+      if (hasTrend.value) {
         context.beginPath();
         context.moveTo(first.x, first.y);
         points.slice(1).forEach((point) => context.lineTo(point.x, point.y));
@@ -232,18 +260,44 @@ function drawTrendCanvas() {
         context.setLineCap("round");
         context.setLineJoin("round");
         context.stroke();
-        context.draw();
-      })
-      .exec();
-  });
+      }
+
+      context.setTextAlign("center");
+      context.setFontSize(10);
+      points.forEach((point) => {
+        context.beginPath();
+        context.arc(point.x, point.y, 4, 0, Math.PI * 2);
+        context.setFillStyle("#ffffff");
+        context.fill();
+        context.setStrokeStyle("#6d4fb8");
+        context.setLineWidth(2);
+        context.stroke();
+
+        context.setFillStyle("#4c347d");
+        context.fillText(point.displayValue, point.x, Math.max(11, point.y - 8));
+      });
+
+      context.draw();
+    })
+    .exec();
 }
 
-onMounted(drawTrendCanvas);
+onMounted(scheduleDraw);
+onActivated(scheduleDraw);
 watch(
   [() => props.chartType, () => props.yMax, () => props.points],
-  drawTrendCanvas,
+  () => scheduleDraw(),
   { deep: true, flush: "post" }
 );
+watch(
+  () => props.active,
+  (active) => {
+    if (active) scheduleDraw(80);
+    else cancelScheduledDraw();
+  },
+  { flush: "post" }
+);
+onUnmounted(cancelScheduledDraw);
 
 const chartAriaLabel = computed(() => {
   const values = safePoints.value.map((point) => {
@@ -349,8 +403,8 @@ const chartAriaLabel = computed(() => {
 }
 
 .overall-trend-bar-wrap {
-  flex: 1;
-  min-width: 0;
+  flex: none;
+  width: 22rpx;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -368,7 +422,7 @@ const chartAriaLabel = computed(() => {
 
 .overall-trend-bar {
   flex: none;
-  width: 100%;
+  width: 20rpx;
   border-radius: 999rpx 999rpx 0 0;
 }
 
@@ -404,34 +458,6 @@ const chartAriaLabel = computed(() => {
   width: 100%;
   height: 100%;
   pointer-events: none;
-}
-
-.overall-trend-point {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  z-index: 1;
-  transform: translate(-50%, -50%);
-}
-
-.overall-trend-point-value {
-  margin-bottom: 4rpx;
-  padding: 1rpx 5rpx;
-  border-radius: 6rpx;
-  background: rgba(255, 255, 255, 0.9);
-  font-size: 18rpx;
-  line-height: 1.2;
-  color: $coach-purple-800;
-}
-
-.overall-trend-point-dot {
-  width: 12rpx;
-  height: 12rpx;
-  border: 3rpx solid $coach-purple-600;
-  border-radius: 50%;
-  background: #fff;
-  box-sizing: border-box;
 }
 
 .overall-trend-line-labels {
