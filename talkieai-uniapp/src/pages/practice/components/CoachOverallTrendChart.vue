@@ -18,15 +18,20 @@
       <view v-for="item in columns" :key="item.key" class="overall-trend-col">
         <view class="overall-trend-track">
           <view class="overall-trend-bars">
-            <view
-              class="overall-trend-bar overall-trend-bar-primary"
-              :style="{ height: item.primaryHeight + '%', minHeight: item.primaryValue > 0 ? '8rpx' : '0' }"
-            />
-            <view
-              v-if="hasSecondary"
-              class="overall-trend-bar overall-trend-bar-secondary"
-              :style="{ height: item.secondaryHeight + '%', minHeight: item.secondaryValue > 0 ? '8rpx' : '0' }"
-            />
+            <view class="overall-trend-bar-wrap">
+              <text class="overall-trend-bar-value">{{ item.primaryValue }}</text>
+              <view
+                class="overall-trend-bar overall-trend-bar-primary"
+                :style="{ height: item.primaryHeight + '%', minHeight: item.primaryValue > 0 ? '8rpx' : '0' }"
+              />
+            </view>
+            <view v-if="hasSecondary" class="overall-trend-bar-wrap">
+              <text class="overall-trend-bar-value">{{ item.secondaryValue }}</text>
+              <view
+                class="overall-trend-bar overall-trend-bar-secondary"
+                :style="{ height: item.secondaryHeight + '%', minHeight: item.secondaryValue > 0 ? '8rpx' : '0' }"
+              />
+            </view>
           </view>
         </view>
         <text class="overall-trend-label">{{ item.label }}</text>
@@ -35,29 +40,19 @@
 
     <view v-else class="overall-trend-line-chart">
       <view class="overall-trend-line-canvas">
-        <svg
-          class="overall-trend-svg"
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
+        <canvas
+          :id="canvasId"
+          :canvas-id="canvasId"
+          class="overall-trend-canvas"
+          :hidpi="true"
           aria-hidden="true"
-        >
-          <polygon
-            v-if="chartType === 'area' && hasTrend"
-            :points="areaPoints"
-            class="overall-trend-area"
-          />
-          <polyline
-            v-if="hasTrend"
-            :points="linePoints"
-            class="overall-trend-line"
-          />
-        </svg>
+        />
 
         <view
           v-for="point in lineCoordinates"
           :key="point.key"
           class="overall-trend-point"
-          :style="{ left: point.x + '%', bottom: point.bottom + '%' }"
+          :style="{ left: point.x + '%', top: point.y + '%' }"
         >
           <text class="overall-trend-point-value">{{ point.displayValue }}</text>
           <view class="overall-trend-point-dot" />
@@ -79,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, getCurrentInstance, nextTick, onMounted, watch } from "vue";
 import { maxSeriesValue } from "./coachReviewFormatters";
 
 type ChartType = "bar" | "line" | "area";
@@ -89,6 +84,13 @@ type TrendPoint = {
   primary: number;
   secondary?: number;
 };
+
+const HORIZONTAL_PADDING_PERCENT = 10;
+const TOP_PADDING_PERCENT = 22;
+const BASELINE_PERCENT = 84;
+const BAR_MAX_HEIGHT_PERCENT = 72;
+
+let chartInstanceSequence = 0;
 
 const props = withDefaults(
   defineProps<{
@@ -112,6 +114,9 @@ const props = withDefaults(
   }
 );
 
+const componentInstance = getCurrentInstance()?.proxy;
+const canvasId = `coach-trend-canvas-${++chartInstanceSequence}`;
+
 const showLegend = computed(
   () => props.hasSecondary && !!props.primaryLegend && !!props.secondaryLegend
 );
@@ -134,8 +139,12 @@ const columns = computed(() => {
   return safePoints.value.map((item, index) => {
     const primary = Number(item?.primary ?? 0);
     const secondary = Number(item?.secondary ?? 0);
-    const primaryHeight = Math.round((Math.max(0, primary) / maxValue) * 100);
-    const secondaryHeight = Math.round((Math.max(0, secondary) / maxValue) * 100);
+    const primaryHeight = Math.round(
+      (Math.max(0, primary) / maxValue) * BAR_MAX_HEIGHT_PERCENT
+    );
+    const secondaryHeight = Math.round(
+      (Math.max(0, secondary) / maxValue) * BAR_MAX_HEIGHT_PERCENT
+    );
 
     return {
       key: `${item?.label || "-"}-${index}`,
@@ -155,30 +164,86 @@ const lineCoordinates = computed(() => {
   return safePoints.value.map((item, index) => {
     const value = Math.max(0, Number(item?.primary ?? 0));
     const ratio = Math.min(1, value / maxValue);
-    const x = lastIndex <= 0 ? 50 : 4 + (index / lastIndex) * 92;
-    const y = 94 - ratio * 84;
+    const horizontalRange = 100 - HORIZONTAL_PADDING_PERCENT * 2;
+    const x = lastIndex <= 0
+      ? 50
+      : HORIZONTAL_PADDING_PERCENT + (index / lastIndex) * horizontalRange;
+    const y = BASELINE_PERCENT - ratio * (BASELINE_PERCENT - TOP_PADDING_PERCENT);
 
     return {
       key: `${item?.label || "-"}-${index}`,
       label: item?.label || "-",
       x: Number(x.toFixed(2)),
       y: Number(y.toFixed(2)),
-      bottom: Number((100 - y).toFixed(2)),
       displayValue: `${value}${props.valueSuffix}`,
     };
   });
 });
 
 const hasTrend = computed(() => lineCoordinates.value.length > 1);
-const linePoints = computed(() =>
-  lineCoordinates.value.map((point) => `${point.x},${point.y}`).join(" ")
+
+function drawTrendCanvas() {
+  if (props.chartType === "bar") return;
+
+  nextTick(() => {
+    const query = uni.createSelectorQuery();
+    if (componentInstance) query.in(componentInstance);
+
+    query
+      .select(`#${canvasId}`)
+      .boundingClientRect((rect: any) => {
+        const width = Number(rect?.width ?? 0);
+        const height = Number(rect?.height ?? 0);
+        if (width <= 0 || height <= 0) return;
+
+        // DCloud CanvasContext API requires the component instance for a
+        // canvas declared inside a custom component.
+        const context = uni.createCanvasContext(canvasId, componentInstance);
+        context.clearRect(0, 0, width, height);
+
+        if (!hasTrend.value) {
+          context.draw();
+          return;
+        }
+
+        const points = lineCoordinates.value.map((point) => ({
+          x: (point.x / 100) * width,
+          y: (point.y / 100) * height,
+        }));
+        const baseline = (BASELINE_PERCENT / 100) * height;
+        const first = points[0];
+        const last = points[points.length - 1];
+
+        if (props.chartType === "area") {
+          context.beginPath();
+          context.moveTo(first.x, baseline);
+          points.forEach((point) => context.lineTo(point.x, point.y));
+          context.lineTo(last.x, baseline);
+          context.closePath();
+          context.setFillStyle("rgba(124, 92, 191, 0.18)");
+          context.fill();
+        }
+
+        context.beginPath();
+        context.moveTo(first.x, first.y);
+        points.slice(1).forEach((point) => context.lineTo(point.x, point.y));
+        context.setStrokeStyle("#6d4fb8");
+        context.setLineWidth(2.4);
+        context.setLineCap("round");
+        context.setLineJoin("round");
+        context.stroke();
+        context.draw();
+      })
+      .exec();
+  });
+}
+
+onMounted(drawTrendCanvas);
+watch(
+  [() => props.chartType, () => props.yMax, () => props.points],
+  drawTrendCanvas,
+  { deep: true, flush: "post" }
 );
-const areaPoints = computed(() => {
-  if (!hasTrend.value) return "";
-  const first = lineCoordinates.value[0];
-  const last = lineCoordinates.value[lineCoordinates.value.length - 1];
-  return `${first.x},94 ${linePoints.value} ${last.x},94`;
-});
 
 const chartAriaLabel = computed(() => {
   const values = safePoints.value.map((point) => {
@@ -198,6 +263,7 @@ const chartAriaLabel = computed(() => {
   border: 1rpx solid rgba(124, 92, 191, 0.14);
   border-radius: 16rpx;
   padding: 16rpx;
+  overflow: hidden;
 }
 
 .overall-trend-head {
@@ -262,7 +328,7 @@ const chartAriaLabel = computed(() => {
 
 .overall-trend-track {
   width: 100%;
-  height: 118rpx;
+  height: 136rpx;
   border-radius: 999rpx;
   background: rgba(124, 92, 191, 0.1);
   display: flex;
@@ -270,6 +336,7 @@ const chartAriaLabel = computed(() => {
   justify-content: center;
   padding: 8rpx;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .overall-trend-bars {
@@ -281,8 +348,27 @@ const chartAriaLabel = computed(() => {
   gap: 8rpx;
 }
 
-.overall-trend-bar {
+.overall-trend-bar-wrap {
   flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.overall-trend-bar-value {
+  flex: none;
+  margin-bottom: 4rpx;
+  font-size: 18rpx;
+  line-height: 1.2;
+  color: $coach-purple-800;
+}
+
+.overall-trend-bar {
+  flex: none;
+  width: 100%;
   border-radius: 999rpx 999rpx 0 0;
 }
 
@@ -300,8 +386,9 @@ const chartAriaLabel = computed(() => {
 
 .overall-trend-line-canvas {
   position: relative;
-  height: 132rpx;
+  height: 156rpx;
   border-radius: 12rpx;
+  overflow: hidden;
   background: repeating-linear-gradient(
     to bottom,
     rgba(124, 92, 191, 0.08) 0,
@@ -311,25 +398,12 @@ const chartAriaLabel = computed(() => {
   );
 }
 
-.overall-trend-svg {
+.overall-trend-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  overflow: visible;
-}
-
-.overall-trend-area {
-  fill: rgba(124, 92, 191, 0.16);
-}
-
-.overall-trend-line {
-  fill: none;
-  stroke: $coach-purple-600;
-  stroke-width: 2.4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .overall-trend-point {
@@ -337,7 +411,8 @@ const chartAriaLabel = computed(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  transform: translate(-50%, 50%);
+  z-index: 1;
+  transform: translate(-50%, -50%);
 }
 
 .overall-trend-point-value {
