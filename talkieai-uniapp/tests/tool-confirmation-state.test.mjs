@@ -27,6 +27,21 @@ const persisted = {
   status: "pending",
 };
 
+test("long adaptive sessions can restore a confirmation after turn fifteen", () => {
+  assert.equal(createToolConfirmationState({ ...persisted, turn_index: 20 }).turnIndex, 20);
+});
+
+test("a terminal tool success remains successful when dialogue is paused", () => {
+  const state = markConfirmationSubmitting(createToolConfirmationState(persisted));
+  const result = resolveToolExecution(state, {
+    contract_version: "v1", tool_name: "mark_goal_complete", status: "succeeded",
+    action_id: persisted.action_id, action_status: "completed", session_status: "paused",
+    assistant_message: "",
+  });
+  assert.equal(result.state.status, "completed");
+  assert.equal(result.assistantMessage, "");
+});
+
 test("creates a pending state only for confirmation-gated write tools", () => {
   const state = createToolConfirmationState(persisted);
   assert.equal(state.status, "pending");

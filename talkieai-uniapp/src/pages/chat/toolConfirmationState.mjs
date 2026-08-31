@@ -24,8 +24,8 @@ export function createToolConfirmationState(persisted) {
   if (request.requires_confirmation !== true || !isPlainObject(request.arguments)) {
     throw new Error("write tool must require confirmation and object arguments");
   }
-  if (!Number.isInteger(turnIndex) || turnIndex < 0 || turnIndex > 15) {
-    throw new Error("tool confirmation turn index must be between 0 and 15");
+  if (!Number.isSafeInteger(turnIndex) || turnIndex < 0) {
+    throw new Error("tool confirmation turn index must be a non-negative integer");
   }
   if (typeof actionId !== "string" || !actionId.trim()) {
     throw new Error("tool confirmation action id is required");
@@ -123,8 +123,7 @@ export function resolveToolExecution(state, result, transportError = null) {
       : "";
   if (
     result.status === "succeeded" &&
-    result.action_status === "completed" &&
-    assistantMessage
+    result.action_status === "completed"
   ) {
     return {
       state: { ...state, status: "completed", error: "" },

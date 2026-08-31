@@ -41,6 +41,9 @@ export default {
   getCurrentSession: () => {
     return request("/mas/sessions/current", "GET", null, false);
   },
+  controlSession: (data: { session_id: string; session_generation: number; command: string }) => {
+    return request("/mas/sessions/control", "POST", data, false);
+  },
   getConversationHistory: () => {
     return request("/mas/sessions/history", "GET", null, false);
   },

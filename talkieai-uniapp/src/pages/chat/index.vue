@@ -21,6 +21,16 @@
     <!-- 聊天内容 -->
     <view class="chat-container" :class="{ 'chat-container--mas': session.type === 'MAS' && !isHistoryView }">
       <view v-if="session.type === 'MAS' && !isHistoryView" class="mas-coach-dash">
+        <view v-if="adaptiveControls.length || adaptiveInputBlocked" class="adaptive-session-controls" aria-live="polite">
+          <text v-if="adaptiveInputBlocked">{{ adaptiveState?.stop_requested ? 'Finishing the confirmed action…' : adaptiveState?.session_status === 'paused' ? 'Session paused. Your progress is saved.' : 'Choose whether to continue or pause.' }}</text>
+          <view class="adaptive-session-buttons">
+            <button v-for="control in adaptiveControls" :key="control.command" size="mini"
+              role="button" tabindex="0" :aria-disabled="adaptiveControlBusy"
+              :disabled="adaptiveControlBusy" @tap="handleAdaptiveControl(control.command)"
+              @keydown.enter.prevent="handleAdaptiveControl(control.command)"
+              @keydown.space.prevent="handleAdaptiveControl(control.command)">{{ control.label }}</button>
+          </view>
+        </view>
         <CoachDashboardCards
           :dashboard="coachDashboard"
           :loading="coachDashboardLoading"
@@ -43,7 +53,7 @@
     </view>
 
     <!-- 底部操作栏：历史查看模式下不显示 -->
-    <view class="chat-bottom-container" v-if="!isMasSessionCompleted && !isHistoryView && !hasBlockingToolConfirmation">
+    <view class="chat-bottom-container" v-if="!isMasSessionCompleted && !isHistoryView && !hasBlockingToolConfirmation && !adaptiveInputBlocked">
       <!-- 键盘输入 -->
       <view v-if="!inputTypeVoice" class="input-bottom-container" :style="'bottom:' + inputBottom + 'px;'">
         <view @tap="handleSwitchInputType" class="voice-icon-box">
@@ -176,6 +186,7 @@ import { ref, computed, nextTick, onMounted, onBeforeUnmount, getCurrentInstance
 import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
 import chatRequest from "@/api/chat";
 import masRequest from "@/api/mas";
+import { adaptiveSessionControls, blocksAdaptiveInput } from "@/pages/chat/adaptiveSessionState.mjs";
 import accountRequest from "@/api/account";
 import topicRequest from "@/api/topic";
 import utils from "@/utils/utils";
@@ -241,6 +252,30 @@ const accountSetting = ref<AccountSettings>({
 
 // MAS会话状态
 const isMasSessionCompleted = ref(false);
+const adaptiveState = ref<Record<string, any> | null>(null);
+const adaptiveControlBusy = ref(false);
+const adaptiveControls = computed(() => adaptiveSessionControls(adaptiveState.value));
+const adaptiveInputBlocked = computed(() => blocksAdaptiveInput(adaptiveState.value));
+const handleAdaptiveControl = async (command: string) => {
+  if (adaptiveControlBusy.value || !session.value.id || !adaptiveState.value) return;
+  if (command === "stop") {
+    const answer = await uni.showModal({ title: "End this session?", content: "Unconfirmed changes will be cancelled. Your conversation will remain available in History." });
+    if (!answer.confirm) return;
+  }
+  adaptiveControlBusy.value = true;
+  try {
+    const response = await masRequest.controlSession({ session_id: session.value.id,
+      session_generation: adaptiveState.value.session_generation, command });
+    if (response?.data?.status !== "ok") throw new Error("Session control was not acknowledged");
+    adaptiveState.value = response.data;
+    isMasSessionCompleted.value = response.data.session_status === "completed";
+    onToolRefresh();
+  } catch {
+    uni.showToast({ title: "Unable to update the session. Please refresh and try again.", icon: "none" });
+  } finally {
+    adaptiveControlBusy.value = false;
+  }
+};
 const coachDashboard = ref<Record<string, any> | null>(null);
 const coachDashboardLoading = ref(false);
 const MAS_META_REFRESH_COOLDOWN_MS = 1500;
@@ -500,6 +535,7 @@ const handleInput = (event: any) => {
  * 发送文本（只发文字内容，不发语音文件；若有待发送录音则清空）
  */
 const handleSendText = () => {
+  if (adaptiveInputBlocked.value || adaptiveControlBusy.value) return;
   if (!inputHasText.value) {
     return;
   }
@@ -551,6 +587,7 @@ const onVoiceDelete = () => {
 
 /** 发送下方文字栏内容（仅发文字），然后清空状态 */
 const handleVoiceSend = () => {
+  if (adaptiveInputBlocked.value || adaptiveControlBusy.value) return;
   const text = (voiceTranscribedText.value || "").trim();
   sendMessage(text || "");
   lastRecordedFileName.value = null;
@@ -867,13 +904,14 @@ const checkMasSessionStatus = () => {
   chatRequest.sessionMasGetCurrent().then((statusData) => {
     console.log("Current MAS session status response:", JSON.stringify(statusData));
     const sessionStatus = statusData?.data?.session_status;
+    adaptiveState.value = statusData?.data || adaptiveState.value;
     console.log("Extracted session_status:", sessionStatus);
     isMasSessionCompleted.value = sessionStatus === "completed";
     console.log("isMasSessionCompleted set to:", isMasSessionCompleted.value);
   }).catch((e) => {
     console.error("Failed to get MAS session status:", e);
     // 如果获取失败，不显示按钮
-    isMasSessionCompleted.value = false;
+    // Preserve the last known state when a refresh fails.
   });
 };
 
@@ -1165,6 +1203,18 @@ const scrollToBottom = () => {
 </script>
 
 <style lang="less" scoped>
+.adaptive-session-controls {
+  padding: 16rpx 0;
+  color: #333;
+  font-size: 26rpx;
+}
+.adaptive-session-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+  margin-top: 16rpx;
+  button { margin: 0; min-height: 88rpx; }
+}
 @import url("@/less/coach-purple.less");
 .chat-box {
   display: flex;
