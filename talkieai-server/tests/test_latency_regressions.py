@@ -82,8 +82,10 @@ class LatencyRegressionTest(unittest.TestCase):
             encoding="utf-8"
         )
 
-        # Two writes remain only in the already-completed compatibility branches.
-        self.assertEqual(source.count('"/receive_user_message"'), 2)
+        # Only the explicit completed-session compatibility branch writes here.
+        # Unavailable OA state must not be guessed from a local message count.
+        self.assertEqual(source.count('"/receive_user_message"'), 1)
+        self.assertNotIn("(message_count // 2) + 1", source)
 
     def test_mas_ai_clients_are_reused_and_calls_do_not_block_event_loop(self):
         for agent in ("SOA", "GRA", "SCA"):

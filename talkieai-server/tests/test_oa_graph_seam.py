@@ -156,3 +156,14 @@ def test_stable_request_id_is_deterministic_and_message_specific():
     first = stable_graph_request_id("a", "s", "m")
     assert first == stable_graph_request_id("a", "s", "m")
     assert first != stable_graph_request_id("a", "s", "m2")
+
+
+def test_adaptive_mode_routes_long_conversations_through_oa():
+    gateway = Gateway([
+        {"status": "ok", "workflow_mode": "adaptive_v1", "workflow_version": "oa_adaptive_v1", "session_generation": 3},
+        {"status": "ok", "session_status": "active", "stage_count": 9, "turn_index": 20},
+    ])
+    with patch("app.services.mas.oa_graph_seam.Config.MAS_OA_GRAPH_SEAM_ENABLED", True):
+        result = run(route_if_latched_graph(gateway, "p", "continue", 20, "r"))
+    assert gateway.calls[1][1] == "/adaptive_v1/user_turn"
+    assert result["session_status"] == "active"

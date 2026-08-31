@@ -85,6 +85,41 @@ def test_confirmed_route_executes_the_stored_request_and_completes_action(monkey
     engine.dispose()
 
 
+def test_adaptive_confirmation_checks_oa_before_write_and_reports_terminal_success(monkeypatch):
+    from app.api import mas_routes
+    from app.models.mas_models import ResolveWorkflowToolConfirmationDTO
+    from app.models.mas_workflow_models import ToolResult, ToolResultStatus
+    from app.services.mas import tool_handlers, adaptive_bridge
+
+    engine, db, store, initial = runtime()
+    request = store._parse_request(db.query(store.entity_model).first().tool_request_json)
+    identity = {"workflow_mode": "adaptive_v1", "workflow_version": "oa_adaptive_v1",
+                "session_generation": 3, "operation_id": "request-20"}
+    action = store.create("account-123", "session-123", "message-20", 20, request, workflow_identity=identity)
+    db.commit()
+    events = []
+    async def notify(gateway, patient, original, status, result=None):
+        assert original == identity
+        events.append(status)
+        if status == "succeeded":
+            raise RuntimeError("OA temporarily unavailable")
+        return {"status": "ok"}
+    async def execute(_db, account, request, confirmed):
+        events.append("write")
+        return ToolResult(tool_name=request.tool_name, status=ToolResultStatus.SUCCEEDED, payload={"changed": True})
+    monkeypatch.setattr(adaptive_bridge, "notify_tool", notify)
+    monkeypatch.setattr(tool_handlers, "execute_account_tool", execute)
+    monkeypatch.setattr(mas_routes.PatientMappingService, "get_or_create_patient_id", lambda *args: "p")
+    result = asyncio.run(mas_routes.execute_workflow_tool(
+        ResolveWorkflowToolConfirmationDTO(action_id=action["action_id"], confirmed=True), db, "account-123"))
+    assert events == ["executing", "write", "succeeded"]
+    assert result.data["action_status"] == "completed"
+    assert result.data["continuation_pending"] is True
+    assert store.get(action["action_id"], "account-123")["status"] == "completed"
+    db.close()
+    engine.dispose()
+
+
 def test_cancel_route_persists_without_executing_a_tool(monkeypatch):
     from app.api import mas_routes
     from app.models.mas_models import ResolveWorkflowToolConfirmationDTO

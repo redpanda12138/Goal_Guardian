@@ -19,6 +19,7 @@ for common_dir in (
 
 from mas_memory_store import load_json, save_json
 from prompt_guard import build_coach_prompt, safe_coach_reply
+from adaptive_agent import generate_stage_reply
 
 # === Configuration ===
 OA_URL = "http://oa:8000/receive_message"
@@ -35,6 +36,16 @@ SCA_AUTO_TRIGGER_SSA_DELAY_SECONDS = int(
 
 # === Initialization ===
 app = FastAPI()
+
+
+@app.post("/adaptive_reply")
+async def adaptive_reply(request: Request):
+    data = await request.json()
+    def model(messages, temperature, tools):
+        return {"content": ask_ai(messages, temperature=temperature)}
+    return await run_blocking(generate_stage_reply, "SCA", data, model)
+
+
 _patient_locks = {}
 _patient_locks_guard = asyncio.Lock()
 

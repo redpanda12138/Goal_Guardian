@@ -24,19 +24,21 @@ WORKFLOW_STAGES = WORKFLOW_PHASES | {"waiting_user"}
 def _project_session_status(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
-    if payload.get("workflow_mode") != "graph_v1":
+    versions = {"graph_v1": "oa_graph_v1", "adaptive_v1": "oa_adaptive_v1"}
+    mode = payload.get("workflow_mode")
+    if mode not in versions:
         return payload
     valid = (
-        payload.get("workflow_version") == "oa_graph_v1"
+        payload.get("workflow_version") == versions[mode]
         and type(payload.get("session_generation")) is int
         and payload["session_generation"] >= 1
         and payload.get("workflow_phase") in WORKFLOW_PHASES
-        and payload.get("workflow_stage") in WORKFLOW_STAGES
+        and payload.get("workflow_stage") in (WORKFLOW_STAGES | {"paused"} if mode == "adaptive_v1" else WORKFLOW_STAGES)
     )
     if not valid:
         return {
             "status": "error",
-            "workflow_mode": "graph_v1",
+            "workflow_mode": mode,
             "reason": "invalid_workflow_projection",
         }
     return {**payload, "stage_source": "workflow_state"}

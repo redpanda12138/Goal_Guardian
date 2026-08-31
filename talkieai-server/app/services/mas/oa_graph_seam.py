@@ -61,9 +61,10 @@ async def route_if_latched_graph(
     workflow_mode = mode.get("workflow_mode")
     if workflow_mode == "legacy":
         return None
-    if workflow_mode != "graph_v1" or mode.get("workflow_version") != "oa_graph_v1" or type(mode.get("session_generation")) is not int:
+    versions = {"graph_v1": "oa_graph_v1", "adaptive_v1": "oa_adaptive_v1"}
+    if workflow_mode not in versions or mode.get("workflow_version") != versions[workflow_mode] or type(mode.get("session_generation")) is not int:
         raise OAGraphRoutingError("invalid OA graph session identity")
-    result = await gateway.call_mas_service("oa", "/graph_v1/user_turn", data={
+    result = await gateway.call_mas_service("oa", f"/{workflow_mode}/user_turn", data={
         "patient_id": patient_id,
         "user_input": user_input,
         "turn_index": turn_index,

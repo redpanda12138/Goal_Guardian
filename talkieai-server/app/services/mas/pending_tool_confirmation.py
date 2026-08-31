@@ -35,24 +35,35 @@ class PendingToolConfirmationStore:
         message_id: str,
         turn_index: int,
         request: ToolRequest,
+        workflow_identity: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if request.tool_name not in WRITE_TOOLS or request.requires_confirmation is not True:
             raise ValueError("only confirmation-gated write tools may be persisted")
-        if type(turn_index) is not int or not 0 <= turn_index <= 15:
-            raise ValueError("turn_index must be between 0 and 15")
+        if type(turn_index) is not int or turn_index < 0:
+            raise ValueError("turn_index must be a non-negative integer")
         if not all(
             isinstance(value, str) and value
             for value in (account_id, session_id, message_id)
         ):
             raise ValueError("stable action ownership identifiers are required")
 
+        request_json = request.json()
+        if workflow_identity is not None:
+            if (workflow_identity.get("workflow_mode") != "adaptive_v1"
+                    or workflow_identity.get("workflow_version") != "oa_adaptive_v1"
+                    or type(workflow_identity.get("session_generation")) is not int
+                    or workflow_identity["session_generation"] < 1
+                    or not isinstance(workflow_identity.get("operation_id"), str)
+                    or not workflow_identity["operation_id"]):
+                raise ValueError("invalid adaptive action identity")
+            request_json = json.dumps({"tool_request": json.loads(request_json), "workflow_identity": workflow_identity})
         entity = self.entity_model(
             action_id=short_uuid(),
             account_id=account_id,
             session_id=session_id,
             message_id=message_id,
             turn_index=turn_index,
-            tool_request_json=request.json(),
+            tool_request_json=request_json,
             status="pending",
         )
         self.db.add(entity)
@@ -127,15 +138,21 @@ class PendingToolConfirmationStore:
     @staticmethod
     def _parse_request(raw: str) -> ToolRequest:
         try:
-            return ToolRequest.parse_raw(raw)
+            payload = json.loads(raw)
+            return ToolRequest.parse_obj(payload.get("tool_request", payload))
         except (ValidationError, ValueError, TypeError) as error:
             raise PendingActionConflict("stored tool request is invalid") from error
 
     def _serialize(self, entity: Any) -> Dict[str, Any]:
         request = self._parse_request(entity.tool_request_json)
-        return {
+        result = {
             "action_id": entity.action_id,
             "tool_request": json.loads(request.json()),
             "turn_index": entity.turn_index,
             "status": entity.status,
         }
+        envelope = json.loads(entity.tool_request_json)
+        if "workflow_identity" in envelope:
+            result["workflow_identity"] = envelope["workflow_identity"]
+            result["session_id"] = entity.session_id
+        return result

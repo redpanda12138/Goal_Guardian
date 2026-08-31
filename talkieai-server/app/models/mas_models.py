@@ -66,3 +66,15 @@ class ResolveWorkflowToolConfirmationDTO(BaseModel):
         if not isinstance(value, str) or not value.strip() or len(value) > 80:
             raise ValueError("action_id must be a non-empty stable identifier")
         return value.strip()
+
+
+class AdaptiveSessionControlDTO(BaseModel):
+    session_id: str
+    session_generation: StrictInt
+    command: str
+
+    @validator("command")
+    def validate_command(cls, value):
+        if value not in {"pause", "resume", "extend", "stop", "skip"}:
+            raise ValueError("Unsupported session control")
+        return value

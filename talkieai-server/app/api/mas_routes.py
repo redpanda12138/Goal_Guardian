@@ -15,6 +15,7 @@ from app.models.mas_models import (
     DeleteMasSessionsDTO,
     CoachStateEventDTO,
     ResolveWorkflowToolConfirmationDTO,
+    AdaptiveSessionControlDTO,
 )
 from app.services.mas.patient_mapping_service import PatientMappingService
 from app.services.mas.mas_gateway_service import MASGatewayService
@@ -47,6 +48,13 @@ async def execute_workflow_tool(
 
     store = PendingToolConfirmationStore(db)
     try:
+        action = store.get(dto.action_id, account_id)
+        if action.get("workflow_identity"):
+            from app.services.mas.adaptive_bridge import resolve_adaptive_action
+            patient_id = PatientMappingService(db).get_or_create_patient_id(account_id)
+            data = await resolve_adaptive_action(db, account_id, store, action, dto.confirmed,
+                MASGatewayService, patient_id, execute_account_tool)
+            return ApiResponse(data=data)
         if not dto.confirmed:
             cancelled = store.cancel(dto.action_id, account_id)
             db.commit()
@@ -88,6 +96,42 @@ async def execute_workflow_tool(
     return ApiResponse(data=data)
 
 # ========== MAS会话管理 ==========
+
+@router.post("/mas/sessions/control", name="Control adaptive MAS session")
+async def control_adaptive_session(
+    dto: AdaptiveSessionControlDTO,
+    db: Session = Depends(get_db),
+    account_id: str = Depends(get_current_account),
+):
+    from app.db.chat_entities import MessageSessionEntity
+    from app.services.mas.pending_tool_confirmation import PendingToolConfirmationStore
+
+    session = db.query(MessageSessionEntity).filter(
+        MessageSessionEntity.account_id == account_id,
+        MessageSessionEntity.type == "MAS", MessageSessionEntity.deleted == 0,
+    ).order_by(MessageSessionEntity.create_time.desc(), MessageSessionEntity.id.desc()).first()
+    if not session or session.id != dto.session_id or session.completed:
+        raise HTTPException(409, "Only the current unfinished session can be controlled")
+    patient_id = PatientMappingService(db).get_or_create_patient_id(account_id)
+    result = await MASGatewayService.call_mas_service("oa", "/adaptive_v1/control", data={
+        "patient_id": patient_id, "session_generation": dto.session_generation, "command": dto.command,
+    })
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        raise HTTPException(409, "Session control was not acknowledged")
+    store = PendingToolConfirmationStore(db)
+    cancelled = set(result.get("cancelled_operations", []))
+    for row in db.query(store.entity_model).filter(
+        store.entity_model.account_id == account_id,
+        store.entity_model.session_id == session.id, store.entity_model.status == "pending",
+    ).all():
+        action = store._serialize(row)
+        identity = action.get("workflow_identity", {})
+        if identity.get("session_generation") == dto.session_generation and identity.get("operation_id") in cancelled:
+            store.cancel(action["action_id"], account_id)
+    if result.get("session_status") == "completed":
+        session.completed = 1
+    db.commit()
+    return ApiResponse(data=result)
 
 @router.post("/mas/sessions/create", name="Create MAS Session")
 async def create_mas_session(
@@ -516,11 +560,12 @@ async def trigger_session(
         else:
             patient_id = _get_patient_id_and_release_db(db, account_id)
         
-        result = await MASGatewayService.call_mas_service(
-            "soa",
-            "/trigger",
-            data={"patient_id": patient_id, "turn_index": 1}
-        )
+        from app.services.mas.adaptive_bridge import start_if_adaptive
+        result = await start_if_adaptive(MASGatewayService, patient_id)
+        if result is None:
+            result = await MASGatewayService.call_mas_service(
+                "soa", "/trigger", data={"patient_id": patient_id, "turn_index": 1}
+            )
         
         return ApiResponse(data=result)
     except Exception as e:
@@ -621,6 +666,10 @@ async def get_current_session(
             f"/session_status/{patient_id}",
             method="GET"
         )
+        if result.get("workflow_mode") == "adaptive_v1":
+            from app.services.mas.adaptive_bridge import reconcile_terminal_tools
+            await reconcile_terminal_tools(db, account_id, MASGatewayService, patient_id, result["session_generation"])
+            result = await MASGatewayService.call_mas_service("oa", f"/session_status/{patient_id}", method="GET")
         return ApiResponse(data=result)
     except Exception as e:
         logging.error(f"Get current session error: {e}")

@@ -118,8 +118,13 @@ def build_gra_continuation(
     gateway: Any,
     patient_id: str,
     turn_index: int,
+    workflow_identity: Optional[Dict[str, Any]] = None,
 ) -> AgentContinuation:
     async def continue_agent(result: ToolResult) -> str:
+        if workflow_identity:
+            from app.services.mas.adaptive_bridge import notify_tool
+            response = await notify_tool(gateway, patient_id, workflow_identity, result.status.value, result.dict())
+            return response.get("assistant_message") or "The action result has been saved."
         response = await gateway.call_mas_service(
             "gra",
             "/receive_tool_result",

@@ -21,6 +21,7 @@ from mas_memory_store import load_json, save_json
 from lexical_retriever import CorpusValidationError, LexicalRetriever
 from prompt_guard import build_coach_prompt, safe_coach_reply
 from tool_catalog import openai_tool_catalog
+from adaptive_agent import generate_stage_reply
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/patient_goals"
@@ -98,6 +99,19 @@ def build_retrieval_augmented_messages(messages, retrieval_results):
 
 # === Initialization ===
 app = FastAPI()
+
+
+@app.post("/adaptive_reply")
+async def adaptive_reply(request: Request):
+    data = await request.json()
+    history = data.get("chat_history") or []
+    query = next((item.get("content", "") for item in reversed(history) if item.get("role") == "user"), "")
+    retrieval = await run_blocking(retrieve_graph_context, query)
+    data["context"] = {**data.get("context", {}), "retrieval": retrieval}
+    output = await run_blocking(generate_stage_reply, "GRA", data, ai_helper.ask_ai_message, openai_tool_catalog())
+    return {**output, "retrieval_results": retrieval}
+
+
 _patient_locks = {}
 _patient_locks_guard = asyncio.Lock()
 

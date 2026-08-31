@@ -201,3 +201,42 @@ def memory_exists(service_name, document_name, fallback_path=None):
             select(_MEMORY_TABLE.c.memory_key).where(_MEMORY_TABLE.c.memory_key == key)
         ).fetchone()
     return row is not None
+
+
+def update_json(service_name, document_name, transform):
+    """Atomically compare and replace a document; transform must be side-effect free.
+
+    Adaptive workflow decisions require database persistence. A conditional UPDATE
+    protects against other OA processes, not just threads in the current process.
+    """
+    engine = _get_engine()
+    if engine is None:
+        raise RuntimeError("DATABASE_URL is required for atomic workflow persistence")
+    key = _memory_key(service_name, document_name)
+    for _ in range(64):
+        try:
+            with engine.begin() as conn:
+                row = conn.execute(select(_MEMORY_TABLE.c.payload).where(
+                    _MEMORY_TABLE.c.memory_key == key
+                )).fetchone()
+                old_text = row[0] if row else None
+                result = transform(json.loads(old_text) if row else None)
+                new_text = json.dumps(result, separators=(",", ":"), allow_nan=False)
+                if row:
+                    changed = conn.execute(_MEMORY_TABLE.update().where(
+                        _MEMORY_TABLE.c.memory_key == key,
+                        _MEMORY_TABLE.c.payload == old_text,
+                    ).values(payload=new_text, update_time=datetime.utcnow()))
+                    if changed.rowcount == 1:
+                        return result
+                else:
+                    conn.execute(_MEMORY_TABLE.insert().values(
+                        memory_key=key, service_name=service_name,
+                        document_name=document_name, payload=new_text,
+                        create_time=datetime.utcnow(), update_time=datetime.utcnow(),
+                    ))
+                    return result
+        except IntegrityError:
+            # A concurrent initializer inserted the same key. Read its state.
+            continue
+    raise RuntimeError("workflow_write_contention")

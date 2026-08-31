@@ -49,6 +49,18 @@ def write_request(runtime):
     )
 
 
+def test_adaptive_action_preserves_generation_and_accepts_turn_twenty(store_runtime):
+    runtime = store_runtime
+    identity = {"workflow_mode": "adaptive_v1", "workflow_version": "oa_adaptive_v1",
+                "session_generation": 4, "operation_id": "request-20"}
+    created = runtime["store"].create("a", "s", "m", 20, write_request(runtime), workflow_identity=identity)
+    runtime["db"].commit()
+    restored = runtime["store"].get(created["action_id"], "a")
+    assert restored["workflow_identity"] == identity
+    assert restored["session_id"] == "s"
+    assert runtime["store"].claim(created["action_id"], "a").tool_name == runtime["ToolName"].MARK_GOAL_COMPLETE
+
+
 def test_pending_action_round_trips_for_the_owning_message_after_reload(store_runtime):
     runtime = store_runtime
     created = runtime["store"].create(

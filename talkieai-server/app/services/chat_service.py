@@ -10,6 +10,7 @@ from app.models.chat_models import *
 from app.services.account_service import AccountService
 from app.services.topic_service import TopicService
 from app.services.mas.session_creation_policy import is_recent_session
+from app.services.mas.adaptive_bridge import is_completed, start_if_adaptive
 
 from app.ai.models import *
 from app.ai import chat_ai
@@ -247,13 +248,13 @@ class ChatService:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
             
-            result_data = loop.run_until_complete(
-                MASGatewayService.call_mas_service(
-                    "soa",
-                    "/trigger",
-                    data={"patient_id": patient_id, "turn_index": 1}
+            result_data = loop.run_until_complete(start_if_adaptive(MASGatewayService, patient_id))
+            if result_data is None:
+                result_data = loop.run_until_complete(
+                    MASGatewayService.call_mas_service(
+                        "soa", "/trigger", data={"patient_id": patient_id, "turn_index": 1}
+                    )
                 )
-            )
             
             greeting_message = str(result_data.get("assistant_message") or "").strip()
             if not greeting_message:
@@ -394,6 +395,8 @@ class ChatService:
         session = self.__get_and_check_session(session_id, account_id)
         if session.type != 'MAS':
             raise Exception("Session type is not MAS")
+        if session.completed or session.deleted:
+            raise RuntimeError("This session is read-only")
         
         # 获取patient_id
         mapping_service = PatientMappingService(self.db)
@@ -430,12 +433,14 @@ class ChatService:
             )
             current_turn_index = status_data.get("turn_index", 1)
             session_status = status_data.get("session_status", "active")
+            if status_data.get("workflow_mode") == "adaptive_v1" and session_status != "active":
+                raise RuntimeError("The adaptive session is " + session_status)
             
             from app.core.logging import logging
             logging.info(f"📊 MAS session status check: patient_id={patient_id}, turn_index={current_turn_index}, session_status={session_status}")
             
             # 如果会话已结束，直接返回结束消息
-            if session_status == "completed" or current_turn_index >= 15:
+            if is_completed(status_data):
                 logging.warning(f"⚠️ Session is completed for patient {patient_id}: turn_index={current_turn_index}, session_status={session_status}")
                 # 保存用户消息到数据库
                 sequence = self.__get_message_sequence(session_id)
@@ -499,75 +504,7 @@ class ChatService:
             if current_turn_index == 0 or current_turn_index is None:
                 current_turn_index = 1
         except Exception as e:
-            # 如果获取状态失败，从数据库消息数量推断turn_index
-            from app.core.logging import logging
-            logging.warning(f"Failed to get MAS session status: {e}, using message count")
-            message_count = (
-                self.db.query(MessageEntity)
-                .filter_by(session_id=session_id, account_id=account_id, deleted=0)
-                .count()
-            )
-            # 每条消息包含user和assistant，所以turn_index = (message_count / 2) + 1
-            current_turn_index = max(1, (message_count // 2) + 1)
-            
-            # 如果推断的turn_index >= 15，会话已结束
-            if current_turn_index >= 15:
-                sequence = self.__get_message_sequence(session_id)
-                add_account_message = self.__add_account_message(
-                    account_id, session_id, send_message_content, sequence + 1, dto.file_name
-                )
-                send_message_id = add_account_message.id
-                self.db.add(add_account_message)
-                self.db.flush()
-                
-                # 即使会话已结束，也要保存user消息到OA，以便MMA可以提取
-                try:
-                    result = loop.run_until_complete(
-                        MASGatewayService.call_mas_service(
-                            "oa",
-                            "/receive_user_message",
-                            data={
-                                "patient_id": patient_id,
-                                "user_input": send_message_content,
-                                "turn_index": current_turn_index
-                            }
-                        )
-                    )
-                    if result.get("status") == "ok":
-                        logging.info(f"✅ Saved user message to OA for patient {patient_id} (session completed, inferred): {result}")
-                    else:
-                        logging.warning(f"⚠️ OA returned non-ok status: {result}")
-                except Exception as e:
-                    import traceback
-                    logging.error(f"❌ Failed to save user message to OA (session completed, inferred): {e}")
-                    logging.error(f"Traceback: {traceback.format_exc()}")
-                
-                end_message = "This session has been completed. Thank you for participating in today's health coaching session. We'll see you next time!"
-                sequence = self.__get_message_sequence(session_id)
-                add_system_message = self.__add_system_message(
-                    session_id,
-                    account_id,
-                    end_message,
-                    "",
-                    sequence + 1,
-                )
-                
-                self.db.add(add_account_message)
-                self.db.add(add_system_message)
-                self.db.commit()
-                self.db.flush()
-                self.__refresh_session_message_count(session_id)
-                self._mark_mas_session_completed(session_id, account_id)
-
-                return {
-                    "data": end_message,
-                    "id": add_system_message.id,
-                    "session_id": session_id,
-                    "send_message_id": send_message_id,
-                    "send_message_content": send_message_content,
-                    "create_time": date_to_str(add_system_message.create_time),
-                    "completed": True,
-                }
+            raise RuntimeError("MAS session status is unavailable; please retry") from e
         
         # 保存用户消息到数据库
         sequence = self.__get_message_sequence(session_id)
@@ -628,13 +565,15 @@ class ChatService:
                     )
 
                     async def persist_confirmation(message):
+                        workflow_identity = graph_result.get("workflow_identity")
                         response = await MASGatewayService.call_mas_service(
                             "oa",
-                            "/receive_message",
+                            "/adaptive_v1/tool_message" if workflow_identity else "/receive_message",
                             data={
                                 "patient_id": patient_id,
                                 "turn_index": graph_tool_turn,
                                 "message": message,
+                                **(workflow_identity or {}),
                             },
                         )
                         if not isinstance(response, dict) or response.get("status") != "ok":
@@ -648,12 +587,17 @@ class ChatService:
                                 MASGatewayService,
                                 patient_id,
                                 graph_tool_turn,
+                                workflow_identity=graph_result.get("workflow_identity"),
                             ),
                             persist_confirmation=persist_confirmation,
                         )
                     )
                     if result_data.get("tool_confirmation") is not None:
                         result_data["tool_confirmation_turn_index"] = graph_tool_turn
+                        result_data["workflow_identity"] = graph_result.get("workflow_identity")
+                    for key in ("workflow_mode", "workflow_version", "session_generation", "session_status", "stage_count", "workflow_phase"):
+                        if key in graph_result:
+                            result_data[key] = graph_result[key]
                 finally:
                     tool_db.close()
                 if graph_result.get("retrieval_results"):
@@ -747,6 +691,7 @@ class ChatService:
                     message_id=add_system_message.id,
                     turn_index=result_data["tool_confirmation_turn_index"],
                     request=ToolRequest.parse_obj(result_data["tool_confirmation"]),
+                    workflow_identity=result_data.get("workflow_identity"),
                 )
             self.db.commit()
             self.db.flush()
@@ -758,8 +703,14 @@ class ChatService:
                 "send_message_id": send_message_id,
                 "send_message_content": send_message_content,
                 "create_time": date_to_str(add_system_message.create_time),
-                "completed": False,
+                "completed": is_completed(result_data),
             }
+            if result_data.get("workflow_mode") == "adaptive_v1":
+                response_payload.update({key: result_data.get(key) for key in (
+                    "workflow_mode", "session_status", "stage_count", "workflow_phase", "session_generation"
+                )})
+                if response_payload["completed"]:
+                    self._mark_mas_session_completed(session_id, account_id)
             if pending_confirmation is not None:
                 response_payload["tool_confirmation"] = pending_confirmation
             if result_data.get("tool_result") is not None:
@@ -783,7 +734,7 @@ class ChatService:
             session_status = status_data.get("session_status", "active")
             
             # 如果会话已结束，返回结束消息并触发MMA提取
-            if session_status == "completed" or updated_turn_index >= 15:
+            if is_completed(status_data):
                 # 会话结束，触发MMA提取patient info和goals
                 try:
                     from datetime import datetime

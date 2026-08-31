@@ -16,6 +16,8 @@ for common_dir in (
 from mas_memory_store import load_json, save_json, memory_exists
 from runtime_config import orchestration_enabled
 from workflow_phase2 import reserve_graph_dispatch, reset_active_sessions, reset_patient_session, session_identity, shadow_route_comparison, transition_dispatch, workflow_projection
+import adaptive_routes
+from adaptive_workflow import AdaptiveWorkflow, projection as adaptive_projection
 
 # === Configuration ===
 MMA_URL = "http://mma:8000/extract"
@@ -58,6 +60,7 @@ def format_utc_iso_z(dt_utc: datetime) -> str:
 
 # === Initialization ===
 app = FastAPI()
+app.include_router(adaptive_routes.router)
 
 
 # === Memory Handlers ===
@@ -149,6 +152,10 @@ def save_message(new_record):
 
 # === Trigger Helper (used by both loop and endpoint) ===
 def trigger_agent_sync(patient_id: str, turn_index: int, agent_to_trigger: str) -> dict:
+    if adaptive_routes.existing(patient_id):
+        if agent_to_trigger == "SOA":
+            return adaptive_routes.start_session(patient_id)
+        return {"status": "error", "reason": "adaptive_handoff_requires_assessment"}
     agent = agent_to_trigger.lower()
     url = AGENT_URL.format(agent=agent)
 
@@ -251,6 +258,9 @@ def reset_patient_session_state(patient_id: str) -> None:
     定时预约再次触发 SOA 时，若开场白与上一轮最后一条 assistant 相同，
     receive_message 会去重跳过，导致用户看不到“新回合”——故调度触发前必须先重置。
     """
+    if adaptive_routes.enabled() or adaptive_routes.existing(patient_id):
+        AdaptiveWorkflow(patient_id).reset()
+        return
     reset_patient_session(load_goal_reviews, save_goal_reviews, patient_id)
     print(
         f"🗓️ Reset OA session state for {patient_id} before scheduled SOA trigger",
@@ -439,6 +449,8 @@ async def receive_new_sessions(request: Request):
 async def receive_message(request: Request):
     data = await request.json()
     patient_id = data.get("patient_id")
+    if adaptive_routes.existing(patient_id):
+        raise HTTPException(409, "adaptive_identity_required")
     turn_index = data.get("turn_index")
     assistant_message = data.get("message")
 
@@ -487,6 +499,8 @@ async def receive_user_message(request: Request):
     """
     data = await request.json()
     patient_id = data.get("patient_id")
+    if adaptive_routes.existing(patient_id):
+        raise HTTPException(409, "adaptive_identity_required")
     turn_index = data.get("turn_index")
     user_message = data.get("user_input") or data.get("message")
 
@@ -599,6 +613,9 @@ async def trigger_agent(request: Request):
 
 @app.get("/workflow_mode/{patient_id}")
 async def workflow_mode(patient_id: str):
+    adaptive = adaptive_routes.existing(patient_id)
+    if adaptive:
+        return {"status": "ok", "patient_id": patient_id, **adaptive_projection(adaptive)}
     record = next((item for item in load_goal_reviews() if item.get("patient_id") == patient_id), {})
     return {
         "status": "ok",
@@ -710,6 +727,10 @@ async def get_conversation_history(patient_id: str):
     """
     获取指定患者的完整对话历史
     """
+    adaptive = adaptive_routes.existing(patient_id)
+    if adaptive:
+        return {"status": "ok", "patient_id": patient_id,
+                "chat_history": adaptive["chat_history"], **adaptive_projection(adaptive)}
     records = load_goal_reviews()
     patient_entry = next((r for r in records if r.get("patient_id") == patient_id), None)
     
@@ -733,6 +754,13 @@ async def get_session_status(patient_id: str):
     """
     获取指定患者的当前会话状态
     """
+    adaptive = adaptive_routes.existing(patient_id)
+    if adaptive:
+        if adaptive["session_status"] == "completed":
+            await asyncio.to_thread(adaptive_routes.summarise_if_ready, AdaptiveWorkflow(patient_id))
+            adaptive = adaptive_routes.existing(patient_id)
+        return {"status": "ok", "patient_id": patient_id,
+                "total_turns": len(adaptive["chat_history"]), **adaptive_projection(adaptive)}
     records = load_goal_reviews()
     patient_entry = next((r for r in records if r.get("patient_id") == patient_id), None)
     
